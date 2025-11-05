@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import glob, os, pickle
+import glob, os, pickle, sys
 from astropy.io import fits
 import astropy.units as u
 from astropy.coordinates import SkyCoord
@@ -102,7 +102,8 @@ def perform_n_simulations(n_sim, flux, file_input, file_output, compute_uls=0):
 
         # Setting minimum to 0, given some ~1e-6 fluctuations that can be produced
         ts  = np.where((lik_null - lik_alt) < 0.0, 0.0, (lik_null - lik_alt))
-        ts2 = ts * ts_sign + 2 * np.log10(prob_gw)
+        ts  = ts * ts_sign
+        ts2 = ts + 2 * np.log(prob_gw)
 
         # Checking only in 95% area only
         ts_masked  = np.where(mask_threshold, ts, np.nan)
@@ -123,10 +124,7 @@ def perform_n_simulations(n_sim, flux, file_input, file_output, compute_uls=0):
 
         if compute_uls:
             maps = excess_estimator.run(dataset)
-            ts_map   = maps["sqrt_ts"].data[0] * mask_threshold
             flux_map = maps["flux_ul"].data[0] * mask_threshold
-
-            ts_argmax = np.unravel_index(np.nanargmax(ts_map), ts_map.shape)
             ul_argmax = np.unravel_index(np.nanargmax(flux_map), flux_map.shape)
             
             ulmax.append(np.nanmax(flux_map))
@@ -137,14 +135,17 @@ def perform_n_simulations(n_sim, flux, file_input, file_output, compute_uls=0):
 
     print(f"Writting file:\n --> {file_output}")
     data_dict = dict(
-        lambda_data    = np.array(lambda_data),
-        lambda_ra  = np.array(lambda_ra),
-        lambda_dec = np.array(lambda_dec),
+        lambda_data = np.array(lambda_data),
+        lambda_ra   = np.array(lambda_ra),
+        lambda_dec  = np.array(lambda_dec),
+        
         tsmax     = np.array(tsmax),
         tsmax_ra  = np.array(tsmax_ra),
         tsmax_dec = np.array(tsmax_dec),
+        
         ts_dist  = np.array(ts_dist),
         ts2_dist = np.array(ts2_dist),
+        
         f_ra  = np.array(ra_sim),
         f_dec = np.array(dec_sim),
     )
@@ -155,7 +156,8 @@ def perform_n_simulations(n_sim, flux, file_input, file_output, compute_uls=0):
             ulmax     = np.array(ulmax),
             ulmax_ra  = np.array(ulmax_ra),
             ulmax_dec = np.array(ulmax_dec),
-            ul_dist       = np.array(ul_dist),
+            
+            ul_dist   = np.array(ul_dist),
         )
 
     np.savez(file_output, **data_dict)
