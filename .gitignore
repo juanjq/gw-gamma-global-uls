@@ -1,4 +1,6 @@
 *.pkl
 *.npz
 *.out
+**__pycache__**
+**.ipynb_checkpoints**
 
