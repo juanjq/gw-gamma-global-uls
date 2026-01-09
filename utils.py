@@ -7,7 +7,7 @@ from astropy.coordinates import SkyCoord
 from matplotlib.patches import Circle
 import healpy as hp
 from gammapy.stats.fit_statistics import cash
-from gammapy.estimators.map.excess import convolved_map_dataset_counts_statistics
+from gammapy.estimators.map.excess import convolved_map_dataset_counts_statistics, _get_convolved_maps
 
 from gammapy.modeling.models import (
     PointSpatialModel, PowerLawSpectralModel, ConstantTemporalModel, SkyModel, Models
@@ -50,7 +50,7 @@ def perform_n_simulations(n_sim, flux, file_input, file_output, compute_uls=0):
     print("Setting up everything...\n")
     # Reading the input parameters
     with open(file_input, "rb") as file:
-        dataset, excess_estimator, prob_gw, data_ligo_hp, mask_threshold = pickle.load(file)
+        dataset, excess_estimator, ts_estimator, prob_gw, data_ligo_hp, mask_threshold = pickle.load(file)
     
     # Simulating n_sim source positions following GW sky-map
     pix_indices, nside = np.arange(len(data_ligo_hp)), hp.npix2nside(len(data_ligo_hp))
@@ -81,7 +81,7 @@ def perform_n_simulations(n_sim, flux, file_input, file_output, compute_uls=0):
             spectral_model = PowerLawSpectralModel(
                 index=2, amplitude=f"{flux} cm-2 s-1 TeV-1", reference="1 TeV"
             ),
-            temporal_model = ConstantTemporalModel(const=1),
+            temporal_model = ConstantTemporalModel(),
             name="model-simulated",
         )])
         dataset.models = model_source
@@ -89,11 +89,15 @@ def perform_n_simulations(n_sim, flux, file_input, file_output, compute_uls=0):
         # Generating simulated data
         dataset.fake()
 
+        conv_map = _get_convolved_maps(
+            dataset = dataset, 
+            kernel = excess_estimator.estimate_kernel(dataset), 
+            mask = excess_estimator.estimate_mask_default(dataset), 
+            correlate_off = excess_estimator.correlate_off
+        )
         stats = convolved_map_dataset_counts_statistics(
-            dataset, 
-            excess_estimator.estimate_kernel(dataset), 
-            excess_estimator.estimate_mask_default(dataset), 
-            excess_estimator.correlate_off
+            convolved_maps = conv_map,
+            stat_type = "cash" # 'wstat' or 'cash'
         )
 
         lik_alt  = cash(stats.n_on.sum(axis=0), stats.n_on.sum(axis=0))
@@ -123,7 +127,7 @@ def perform_n_simulations(n_sim, flux, file_input, file_output, compute_uls=0):
         ts2_dist.append(ts2)
 
         if compute_uls:
-            maps = excess_estimator.run(dataset)
+            maps = ts_estimator.run(dataset)
             flux_map = maps["flux_ul"].data[0] * mask_threshold
             ul_argmax = np.unravel_index(np.nanargmax(flux_map), flux_map.shape)
             
