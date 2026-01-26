@@ -89,6 +89,9 @@ def perform_n_simulations(n_sim, flux, file_input, file_output, compute_uls=0):
         # Generating simulated data
         dataset.fake()
 
+        # Setting the model inside as BKG only
+        dataset.models = None
+
         conv_map = _get_convolved_maps(
             dataset = dataset, 
             kernel = excess_estimator.estimate_kernel(dataset), 
