@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import glob, os, pickle, sys, copy
+import glob, os, pickle, sys
 from astropy.io import fits
 import astropy.units as u
 from astropy.coordinates import SkyCoord
@@ -33,9 +33,8 @@ def perform_n_simulations(n_sim, flux, file_input, file_output, compute_uls=0):
         The PWL amplitude parameter in (cm-2 s-1 TeV-1) units.
     file_input (str): 
         Path to the input .pkl file, containing:
+            * ExcessMapEstimator
             * dataset_empty
-            * Excess estimator (for fast TS computation)
-            * TS estimator
             * GW sky-map in WCS
             * GW sky-map in HealPix
             * Mask 95% of the GW
@@ -51,7 +50,7 @@ def perform_n_simulations(n_sim, flux, file_input, file_output, compute_uls=0):
     print("Setting up everything...\n")
     # Reading the input parameters
     with open(file_input, "rb") as file:
-        dataset, excess_estimator, ts_estimator, prob_gw, data_ligo_hp, mask_threshold = pickle.load(file)
+        dataset, excess_estimator, ts_estimator, prob_gw, data_ligo_hp, mask_threshold, source_coord = pickle.load(file)
     
     # Simulating n_sim source positions following GW sky-map
     pix_indices, nside = np.arange(len(data_ligo_hp)), hp.npix2nside(len(data_ligo_hp))
@@ -75,45 +74,38 @@ def perform_n_simulations(n_sim, flux, file_input, file_output, compute_uls=0):
     for i in range(n_sim):
         print(f"Computing... {i+1}/{n_sim}") if ((i+1) % (5 if compute_uls else 250) == 0) else None
         
-        # The model of the source ----------------------------------
-        # We create one for the source where F can be == or > 0.0
-        sim_coord = SkyCoord(ra=ra_sim[i], dec=dec_sim[i], unit=u.deg, frame="icrs")
+        # The model of the source
+        sim_coord = source_coord
         model_source = Models([SkyModel(
             spatial_model = PointSpatialModel.from_position(sim_coord),
-            spectral_model = PowerLawSpectralModel(index=2, amplitude=f"{flux} cm-2 s-1 TeV-1", reference="1 TeV"),
+            spectral_model = PowerLawSpectralModel(
+                index=2, amplitude=f"{flux} cm-2 s-1 TeV-1", reference="1 TeV"
+            ),
             temporal_model = ConstantTemporalModel(),
             name="model-simulated",
         )])
-        # And one with BKG, so F == 0.0 always
-        model_bkg = Models([SkyModel(
-            spatial_model = PointSpatialModel.from_position(sim_coord),
-            spectral_model = PowerLawSpectralModel(index=2, amplitude=f"0.0 cm-2 s-1 TeV-1", reference="1 TeV"),
-            temporal_model = ConstantTemporalModel(),
-            name="model-bkg",
-        )])
         dataset.models = model_source
         
-        # Generating simulated data with same seed "i" so one is the BKG version of others
-        dataset.fake(i)
+        # Generating simulated data
+        dataset.fake()
 
+        # Setting the model inside as BKG only
         dataset.models = None
 
         conv_map = _get_convolved_maps(
             dataset = dataset, 
-            kernel = ts_estimator.estimate_kernel(dataset), 
+            kernel = excess_estimator.estimate_kernel(dataset), 
             mask = excess_estimator.estimate_mask_default(dataset), 
             correlate_off = excess_estimator.correlate_off
         )
         stats = convolved_map_dataset_counts_statistics(
             convolved_maps = conv_map,
-            stat_type = "cash" # "wstat' or "cash"
+            stat_type = "cash" # 'wstat' or 'cash'
         )
 
         lik_alt  = cash(stats.n_on.sum(axis=0), stats.n_on.sum(axis=0))
-        lik_null = cash(stats.n_on.sum(axis=0), stats.mu_bkg.sum(axis=0))
-        ts_sign  = np.where(
-            (stats.n_on.sum(axis=0) - stats.mu_bkg.sum(axis=0)) >= 0.0, +1.0, -1.0
-        )
+        lik_null = cash(stats.n_on.sum(axis=0), stats.n_bkg.sum(axis=0))
+        ts_sign  = np.where((stats.n_on.sum(axis=0) - stats.n_bkg.sum(axis=0)) >= 0.0, +1.0, -1.0)
 
         # Setting minimum to 0, given some ~1e-6 fluctuations that can be produced
         ts  = np.where((lik_null - lik_alt) < 0.0, 0.0, (lik_null - lik_alt))

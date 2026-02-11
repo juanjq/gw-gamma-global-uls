@@ -33,9 +33,8 @@ def perform_n_simulations(n_sim, flux, file_input, file_output, compute_uls=0):
         The PWL amplitude parameter in (cm-2 s-1 TeV-1) units.
     file_input (str): 
         Path to the input .pkl file, containing:
+            * ExcessMapEstimator
             * dataset_empty
-            * Excess estimator (for fast TS computation)
-            * TS estimator
             * GW sky-map in WCS
             * GW sky-map in HealPix
             * Mask 95% of the GW
@@ -52,6 +51,8 @@ def perform_n_simulations(n_sim, flux, file_input, file_output, compute_uls=0):
     # Reading the input parameters
     with open(file_input, "rb") as file:
         dataset, excess_estimator, ts_estimator, prob_gw, data_ligo_hp, mask_threshold = pickle.load(file)
+    # We create a copy of hte dataset to be filled always with BKG, no source will be simulated there
+    dataset_bkg = dataset.copy()
     
     # Simulating n_sim source positions following GW sky-map
     pix_indices, nside = np.arange(len(data_ligo_hp)), hp.npix2nside(len(data_ligo_hp))
@@ -92,28 +93,29 @@ def perform_n_simulations(n_sim, flux, file_input, file_output, compute_uls=0):
             name="model-bkg",
         )])
         dataset.models = model_source
+        dataset_bkg.models = model_bkg
         
         # Generating simulated data with same seed "i" so one is the BKG version of others
         dataset.fake(i)
 
+        # Setting the model now as BKG only, so _get_convolved_maps() understands the excess as a 
+        # source and not as a "source part of the BKG"
         dataset.models = None
 
         conv_map = _get_convolved_maps(
             dataset = dataset, 
-            kernel = ts_estimator.estimate_kernel(dataset), 
+            kernel = excess_estimator.estimate_kernel(dataset), 
             mask = excess_estimator.estimate_mask_default(dataset), 
             correlate_off = excess_estimator.correlate_off
         )
         stats = convolved_map_dataset_counts_statistics(
             convolved_maps = conv_map,
-            stat_type = "cash" # "wstat' or "cash"
+            stat_type = "cash" # 'wstat' or 'cash'
         )
 
         lik_alt  = cash(stats.n_on.sum(axis=0), stats.n_on.sum(axis=0))
         lik_null = cash(stats.n_on.sum(axis=0), stats.mu_bkg.sum(axis=0))
-        ts_sign  = np.where(
-            (stats.n_on.sum(axis=0) - stats.mu_bkg.sum(axis=0)) >= 0.0, +1.0, -1.0
-        )
+        ts_sign  = np.where((stats.n_on.sum(axis=0) - stats.mu_bkg.sum(axis=0)) >= 0.0, +1.0, -1.0)
 
         # Setting minimum to 0, given some ~1e-6 fluctuations that can be produced
         ts  = np.where((lik_null - lik_alt) < 0.0, 0.0, (lik_null - lik_alt))
