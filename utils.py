@@ -58,7 +58,8 @@ def perform_n_simulations(n_sim, flux, file_input, file_output, compute_uls=0):
     
     # Variables to be filled in iterations ---
     results = {
-        "lambda_data": [], "lambda_ra": [], "lambda_dec": [], "tsmax": [], "tsmax_ra": [], "tsmax_dec": [], "ts_dist": [], "ts2_dist": []
+        "lambda_data": [], "lambda_ra": [], "lambda_dec": [], "tsmax": [], 
+        "tsmax_ra": [], "tsmax_dec": [], "ts_dist": [], "ts2_dist": [], "stats": []
     }
     if compute_uls:
         results.update({"ulmax": [], "ulmax_ra": [], "ulmax_dec": [], "ul_dist": []})
@@ -107,6 +108,7 @@ def perform_n_simulations(n_sim, flux, file_input, file_output, compute_uls=0):
         ts2_argmax = np.unravel_index(np.nanargmax(ts2_masked), ts2_masked.shape)
 
         # Storing data ---
+        results["stats"].append(stats)
         # Lambda value, ra, and dec
         results["lambda_data"].append(np.nanmax(ts2_masked))
         results["lambda_ra"].append(bin_c_ra[ts2_argmax])
