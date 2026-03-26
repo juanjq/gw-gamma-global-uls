@@ -48,7 +48,6 @@ def plot_ul_iteration(
         lambda_iter, bins, color="k", density=True, histtype="step", lw=1.5,
         label=f"iter {iteration+1}  Amp={amp_mid:.2e}  N={len(lambda_iter)}"
     )
-    ax1.axvline(lambda_bkg_m, color="darkblue", ls=":",  label=f"BKG med={lambda_bkg_m:.2f}")
     ax1.axvline(target, color="r", ls="-", lw=2, label=f"Target={lambda_real:.2f}")
     ax1.text(
         0.97, 0.95,
@@ -148,7 +147,7 @@ def summary_gw_map(geom, bin_edges_ra, bin_edges_dec, prob_gw):
 
 
 def summary_geometry(
-    geom, bin_edges_ra, bin_edges_dec, size_fov, data_ligo_2d, threshold_maps
+    geom, bin_edges_ra, bin_edges_dec, size_fov, data_ligo_2d, threshold_maps, correlation_radius
 ):
     fig, ax = plt.subplots(figsize=(2.1, 2), subplot_kw={"projection": geom.wcs})
     trans   = ax.get_transform("icrs")
@@ -164,6 +163,16 @@ def summary_geometry(
         transform=trans, zorder=10, label=f"{size_fov}"
     )
     ax.add_patch(circle)
+
+    frac_pos = (0.15, 0.85)
+    circle_corr = Circle(
+        ((1-frac_pos[0]) * bin_edges_ra.min() + (frac_pos[0]) * bin_edges_ra.max(), 
+         (1-frac_pos[1]) * bin_edges_dec.min() + (frac_pos[1]) * bin_edges_dec.max()), 
+        correlation_radius.value, edgecolor="b", facecolor="none", alpha=1.0, lw=1,
+        transform=trans, zorder=10, label=f"Corr R {correlation_radius}"
+    )
+    ax.add_patch(circle_corr)
+    
     lims = ax.get_xlim(), ax.get_ylim()
 
     if threshold_maps is not None:
@@ -320,3 +329,5 @@ def summary_bkg_simulations(geom, bin_edges_ra, bin_edges_dec, data_ligo_2d, thr
 
     fig.tight_layout()
     plt.show()
+
+

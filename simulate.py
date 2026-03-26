@@ -95,7 +95,7 @@ def perform_n_simulations(n_sim, amplitude, file_input, file_output, compute_uls
     prob_gw_masked[~in_mask] = 0.0
     frac_in_mask          = prob_gw_masked.sum()
     prob_gw_masked       /= frac_in_mask
-    print(f"Mask covers {frac_in_mask * 100:.1f}% of total GW probability\n")
+    # print(f"Mask covers {frac_in_mask * 100:.1f}% of total GW probability\n")
 
     # Sample n_sim positions from masked+renormalized GW map
     indices_hp  = np.random.choice(len(data_ligo_hp), size=n_sim, p=prob_gw_masked)
@@ -197,13 +197,13 @@ def perform_n_simulations(n_sim, amplitude, file_input, file_output, compute_uls
 
 
 # ---------------------------------------------------------------------------
-# Iterative upper-limit computation
+# Iterative upper-limit algorithm
 # ---------------------------------------------------------------------------
 
 def run_iterative_ul(
     path_pkl, lambda_real, lambda_bkg, lambda_bkg_m, significance, p_value, energy_edges,
     cl, n_sim=500, precision=0.05, frac_tol=0.01, amp_lo=1e-13, amp_hi=1e-10, max_iter=20,
-    cache_path=None,  # optional: path to a .pkl file to persist lambda_cache across runs
+    cache_path=None,
 ):
     target = lambda_bkg_m if significance < 0 else lambda_real
 

@@ -7,9 +7,8 @@ from astropy.io import fits
 import healpy as hp
 from scipy.optimize import root_scalar
 
-
 # ---------------------------------------------------------------------------
-# Background helpers
+# Analysis
 # ---------------------------------------------------------------------------
 
 def add_bkg(data_store, obs_id, dir_dl3, dim_bkg, bkg_type):
@@ -29,7 +28,7 @@ def add_bkg(data_store, obs_id, dir_dl3, dim_bkg, bkg_type):
 
 
 # ---------------------------------------------------------------------------
-# Coordinate / HEALPix helpers
+# HEALPix helpers
 # ---------------------------------------------------------------------------
 
 def IndexToDeclRa(index, nside):
@@ -42,7 +41,6 @@ def DeclRaToIndex(decl, ra, nside):
         nside, np.radians(-decl + 90.),
         np.radians(360. - ra)
     )
-
 
 def healpix2map(healpix_data, ra_bins, dec_bins):
     ra_grid, dec_grid = np.meshgrid(ra_bins, dec_bins)
@@ -67,9 +65,38 @@ def get_2d_map_hotspot(map_data_2d, ra_bins, dec_bins):
     max_prob_dec   = dec_bins[max_prob_index[0]]
     return SkyCoord(ra=max_prob_ra, dec=max_prob_dec, unit=u.deg, frame="icrs")
 
-
+def integrate_hp_on_wcs(
+    data_ligo_hp, dec_hp, ra_hp, hp_area, bin_edges_ra, bin_edges_dec, bin_area
+):
+    """Integrate HEALPix probability map onto WCS bins."""
+    mask_hp_wcs = (
+        (-(((ra_hp + 180) % 360) - 180) >= bin_edges_ra[:,-1:].min()) &
+        (dec_hp >= bin_edges_dec[:1,:].max()) &
+        (-(((ra_hp + 180) % 360) - 180) <= bin_edges_ra[:,:1].min()) &
+        (dec_hp <= bin_edges_dec[-1:,:].max())
+    )
+    data_ligo_hp_wcs = data_ligo_hp[mask_hp_wcs]
+    dec_hp_wcs       = dec_hp[mask_hp_wcs]
+    ra_hp_wcs        = -(ra_hp[mask_hp_wcs] + 180) % 360 - 180
+    prob       = np.zeros((len(bin_edges_ra)-1, len(bin_edges_dec)-1))
+    num_pix    = np.zeros((len(bin_edges_ra)-1, len(bin_edges_dec)-1))
+    mask_added = np.zeros(len(ra_hp_wcs), dtype=bool)
+    for i in range(len(bin_edges_ra)-1):
+        for j in range(len(bin_edges_ra[i])-1):
+            mask_bin = (
+                (ra_hp_wcs  >= bin_edges_ra[i,j+1])  &
+                (dec_hp_wcs >= bin_edges_dec[i,j])    &
+                (ra_hp_wcs  <= bin_edges_ra[i,j])     &
+                (dec_hp_wcs <= bin_edges_dec[i+1,j+1])
+            ) & ~mask_added
+            p = np.sum(data_ligo_hp_wcs[mask_bin]) * (bin_area[i,j].value / (np.sum(mask_bin) * hp_area))
+            prob[i,j]    = 0.0 if np.isnan(p) else p
+            num_pix[i,j] = np.sum(mask_bin)
+            mask_added  |= mask_bin
+    return prob, num_pix
+    
 # ---------------------------------------------------------------------------
-# Dirac-delta / WCS integration helpers
+# Dirac-delta / WCS integration
 # ---------------------------------------------------------------------------
 
 def make_dirac_delta_hp(coord: SkyCoord, nside: int) -> np.ndarray:
@@ -103,37 +130,6 @@ def integrate_dirac_delta_on_wcs(data_ligo_hp, dec_hp, ra_hp, bin_edges_ra, bin_
                 prob[i,j], num_pix[i,j] = 1.0, 1
                 return prob, num_pix
     raise ValueError(f"Hot pixel ra={src_ra:.4f}° dec={src_dec:.4f}° outside all WCS bins!")
-
-
-def integrate_hp_on_wcs(
-    data_ligo_hp, dec_hp, ra_hp, hp_area, bin_edges_ra, bin_edges_dec, bin_area
-):
-    """Integrate HEALPix probability map onto WCS bins."""
-    mask_hp_wcs = (
-        (-(((ra_hp + 180) % 360) - 180) >= bin_edges_ra[:,-1:].min()) &
-        (dec_hp >= bin_edges_dec[:1,:].max()) &
-        (-(((ra_hp + 180) % 360) - 180) <= bin_edges_ra[:,:1].min()) &
-        (dec_hp <= bin_edges_dec[-1:,:].max())
-    )
-    data_ligo_hp_wcs = data_ligo_hp[mask_hp_wcs]
-    dec_hp_wcs       = dec_hp[mask_hp_wcs]
-    ra_hp_wcs        = -(ra_hp[mask_hp_wcs] + 180) % 360 - 180
-    prob       = np.zeros((len(bin_edges_ra)-1, len(bin_edges_dec)-1))
-    num_pix    = np.zeros((len(bin_edges_ra)-1, len(bin_edges_dec)-1))
-    mask_added = np.zeros(len(ra_hp_wcs), dtype=bool)
-    for i in range(len(bin_edges_ra)-1):
-        for j in range(len(bin_edges_ra[i])-1):
-            mask_bin = (
-                (ra_hp_wcs  >= bin_edges_ra[i,j+1])  &
-                (dec_hp_wcs >= bin_edges_dec[i,j])    &
-                (ra_hp_wcs  <= bin_edges_ra[i,j])     &
-                (dec_hp_wcs <= bin_edges_dec[i+1,j+1])
-            ) & ~mask_added
-            p = np.sum(data_ligo_hp_wcs[mask_bin]) * (bin_area[i,j].value / (np.sum(mask_bin) * hp_area))
-            prob[i,j]    = 0.0 if np.isnan(p) else p
-            num_pix[i,j] = np.sum(mask_bin)
-            mask_added  |= mask_bin
-    return prob, num_pix
 
 
 # ---------------------------------------------------------------------------
