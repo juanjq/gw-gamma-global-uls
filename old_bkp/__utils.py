@@ -67,34 +67,78 @@ def get_2d_map_hotspot(map_data_2d, ra_bins, dec_bins):
     max_prob_dec   = dec_bins[max_prob_index[0]]
     return SkyCoord(ra=max_prob_ra, dec=max_prob_dec, unit=u.deg, frame="icrs")
 
-def integrate_hp_on_wcs(
-    lvk_prob_hp, dec_hp, ra_hp, hp_area, bin_edges_ra, bin_edges_dec, bin_area
-):
-    """Integrate HEALPix probability map onto WCS bins."""
-    mask_hp_wcs = (
-        (-(((ra_hp + 180) % 360) - 180) >= bin_edges_ra[:,-1:].min()) &
-        (dec_hp >= bin_edges_dec[:1,:].max()) &
-        (-(((ra_hp + 180) % 360) - 180) <= bin_edges_ra[:,:1].min()) &
-        (dec_hp <= bin_edges_dec[-1:,:].max())
-    )
-    lvk_prob_hp_wcs = lvk_prob_hp[mask_hp_wcs]
-    dec_hp_wcs       = dec_hp[mask_hp_wcs]
-    ra_hp_wcs        = -(ra_hp[mask_hp_wcs] + 180) % 360 - 180
-    prob       = np.zeros((len(bin_edges_ra)-1, len(bin_edges_dec)-1))
-    num_pix    = np.zeros((len(bin_edges_ra)-1, len(bin_edges_dec)-1))
-    mask_added = np.zeros(len(ra_hp_wcs), dtype=bool)
-    for i in range(len(bin_edges_ra)-1):
-        for j in range(len(bin_edges_ra[i])-1):
-            mask_bin = (
-                (ra_hp_wcs  >= bin_edges_ra[i,j+1])  &
-                (dec_hp_wcs >= bin_edges_dec[i,j])    &
-                (ra_hp_wcs  <= bin_edges_ra[i,j])     &
-                (dec_hp_wcs <= bin_edges_dec[i+1,j+1])
-            ) & ~mask_added
-            p = np.sum(lvk_prob_hp_wcs[mask_bin]) * (bin_area[i,j].value / (np.sum(mask_bin) * hp_area))
-            prob[i,j]    = 0.0 if np.isnan(p) else p
-            num_pix[i,j] = np.sum(mask_bin)
-            mask_added  |= mask_bin
+def _hp_pixels_to_wcs_idx(geom_image, dec_hp, ra_hp):
+    """Map every HEALPix pixel centre to its WCS pixel, exactly.
+
+    Uses the geometry's own WCS transform (`coord_to_idx`) instead of testing
+    each HEALPix pixel against a bounding box built from bin-edge corners.
+    See the note above `integrate_hp_on_wcs` for why that matters.
+
+    Returns
+    -------
+    idx_i, idx_j : ndarray
+        Row (dec) and column (ra) WCS pixel index for every HEALPix pixel.
+    inside : ndarray of bool
+        True where the HEALPix pixel falls inside the WCS footprint.
+    """
+    coords = SkyCoord(ra=ra_hp, dec=dec_hp, unit=u.deg, frame="icrs")
+    idx_x, idx_y = geom_image.coord_to_idx(coords)   # x <-> lon/ra, y <-> lat/dec
+    inside = (idx_x >= 0) & (idx_y >= 0)
+    return idx_y, idx_x, inside
+
+
+# ---------------------------------------------------------------------------
+# HEALPix -> WCS pixel assignment
+# ---------------------------------------------------------------------------
+# The functions below (integrate_hp_on_wcs, integrate_dirac_delta_on_wcs,
+# map_hp_pixels_to_wcs_bins) used to assign each HEALPix pixel to a WCS bin by
+# testing it against an axis-aligned bounding box built from two opposite
+# corners of that bin's edge grid (e.g. ra tested against corners (i, j) and
+# (i, j+1), dec tested against corners (i, j) and (i+1, j+1)). `bin_edges_ra`
+# / `bin_edges_dec` are 2D arrays taken from the *actual*, generally curved
+# projection (AIR/TAN/...), so a WCS "bin" is really a small quadrilateral,
+# not a rectangle -- an axis-aligned box built from two of its four corners
+# only approximates that shape, and neighbouring approximated boxes can
+# overlap (or leave gaps) wherever the projection isn't locally rectilinear:
+# away from the tangent point, over a wide FoV, or near the poles. A HEALPix
+# pixel landing in such an overlap satisfied the acceptance test for more
+# than one (i, j); `mask_added` then made the *first* bin checked in loop
+# order win, so which bin actually "got" that pixel depended on iteration
+# order rather than on where the pixel truly is -- i.e. exactly the
+# "identified in different WCS pixels" symptom.
+#
+# The fix: instead of reconstructing bin shapes from edges, ask the geometry
+# directly which pixel a coordinate falls in (`WcsGeom.coord_to_idx`) -- the
+# same WCS transform used to build the grid in the first place, so it is
+# exact and gives one unambiguous (i, j) per HEALPix pixel (or -1 if outside
+# the footprint). This also vectorises the whole assignment: an O(n_i * n_j *
+# N_hp) nested-loop scan becomes an O(N_hp) lookup (+ a cheap O(n_i * n_j)
+# pass to pack the per-bin pixel lists), which for a HEALPix map at
+# nside~2048 and a several-thousand-bin WCS grid is a >100x reduction in work.
+
+def integrate_hp_on_wcs(geom_image, lvk_prob_hp, dec_hp, ra_hp, hp_area, bin_area):
+    """Integrate HEALPix probability map onto WCS bins.
+
+    Parameters
+    ----------
+    geom_image : `~gammapy.maps.WcsGeom`
+        2D (image) WCS geometry, e.g. ``geom.to_image()``.
+    """
+
+    idx_i, idx_j, inside = _hp_pixels_to_wcs_idx(geom_image, dec_hp, ra_hp)
+
+    # `WcsGeom` has no `.shape` attribute -- use `data_shape`, which is
+    # already in numpy (ny, nx) order (gammapy builds it from npix[::-1]).
+    ny, nx = (int(s) for s in geom_image.data_shape)
+
+    flat = (idx_i[inside] * nx + idx_j[inside]).astype(int)
+
+    prob_sum = np.bincount(flat, weights=lvk_prob_hp[inside], minlength=ny * nx).reshape(ny, nx)
+    num_pix  = np.bincount(flat, minlength=ny * nx).reshape(ny, nx).astype(float)
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        prob = prob_sum * (bin_area.value / (num_pix * hp_area))
+    prob = np.where(num_pix > 0, prob, 0.0)
     return prob, num_pix
     
 # ---------------------------------------------------------------------------
@@ -118,76 +162,77 @@ def make_dirac_delta_2d(coord, ra_bins, dec_bins):
     return data_2d
 
 
-def integrate_dirac_delta_on_wcs(lvk_prob_hp, dec_hp, ra_hp, bin_edges_ra, bin_edges_dec):
+def integrate_dirac_delta_on_wcs(geom_image, lvk_prob_hp, dec_hp, ra_hp):
     """Place Dirac delta probability into the single WCS bin containing the hot pixel."""
+    # `WcsGeom.npix` returns 1-element numpy arrays (not plain ints) -- cast
+    # them to scalars, or ny*nx and the (ny, nx) shape below silently misbehave.
+    nx, ny = (int(np.ravel(v)[0]) for v in geom_image.npix)
     hot_ipix = np.argmax(lvk_prob_hp)
-    src_ra   = -(ra_hp[hot_ipix] + 180) % 360 - 180
-    src_dec  = dec_hp[hot_ipix]
-    prob     = np.zeros((len(bin_edges_ra)-1, len(bin_edges_dec)-1))
-    num_pix  = np.zeros((len(bin_edges_ra)-1, len(bin_edges_dec)-1))
-    for i in range(len(bin_edges_ra)-1):
-        for j in range(len(bin_edges_ra[i])-1):
-            if (bin_edges_ra[i,j+1] <= src_ra  <= bin_edges_ra[i,j] and
-                bin_edges_dec[i,j]   <= src_dec <= bin_edges_dec[i+1,j+1]):
-                prob[i,j], num_pix[i,j] = 1.0, 1
-                return prob, num_pix
-    raise ValueError(f"Hot pixel ra={src_ra:.4f}° dec={src_dec:.4f}° outside all WCS bins!")
+    coord = SkyCoord(ra=ra_hp[hot_ipix], dec=dec_hp[hot_ipix], unit=u.deg, frame="icrs")
+    idx_x, idx_y = geom_image.coord_to_idx(coord)
+    idx_i, idx_j = int(np.ravel(idx_y)[0]), int(np.ravel(idx_x)[0])
+    if idx_i < 0 or idx_j < 0:
+        raise ValueError(
+            f"Hot pixel ra={ra_hp[hot_ipix]:.4f}\u00b0 dec={dec_hp[hot_ipix]:.4f}\u00b0 "
+            "outside the WCS geometry!"
+        )
+    prob, num_pix = np.zeros((ny, nx)), np.zeros((ny, nx))
+    prob[idx_i, idx_j], num_pix[idx_i, idx_j] = 1.0, 1
+    return prob, num_pix
 
 # ---------------------------------------------------------------------------
 # 3D GW: distance distribution per WCS bin
 # ---------------------------------------------------------------------------
 
-def map_hp_pixels_to_wcs_bins(dec_hp, ra_hp, bin_edges_ra, bin_edges_dec,
-                              fill_empty=True, nside=None):
+def map_hp_pixels_to_wcs_bins(geom_image, dec_hp, ra_hp, fill_empty=True, nside=None):
     """
-    Assign each HEALPix pixel to a WCS bin, with the SAME conventions/ordering
-    as integrate_hp_on_wcs (each pixel used at most once, first bin wins).
+    Assign each HEALPix pixel to a WCS bin, using the same exact
+    (`coord_to_idx`) assignment as `integrate_hp_on_wcs` -- see the note
+    above that function for why this replaced the previous bin-edge
+    bounding-box test. Each HEALPix pixel is used at most once, and (unlike
+    the previous version) which bin it lands in no longer depends on loop
+    order: it's whichever WCS pixel actually contains it.
 
     Returns
     -------
     bin_pixels : object array, shape (n_i, n_j)
         bin_pixels[i, j] -> np.ndarray of HEALPix indices falling in that bin.
     """
-    ipix_all = np.arange(len(ra_hp))
-    mask_hp_wcs = (
-        (-(((ra_hp + 180) % 360) - 180) >= bin_edges_ra[:, -1:].min()) &
-        (dec_hp >= bin_edges_dec[:1, :].max()) &
-        (-(((ra_hp + 180) % 360) - 180) <= bin_edges_ra[:, :1].min()) &
-        (dec_hp <= bin_edges_dec[-1:, :].max())
-    )
-    ipix       = ipix_all[mask_hp_wcs]
-    dec_hp_wcs = dec_hp[mask_hp_wcs]
-    ra_hp_wcs  = -(ra_hp[mask_hp_wcs] + 180) % 360 - 180
+    # `WcsGeom.npix` returns 1-element numpy arrays (not plain ints). Left as
+    # arrays, `ny * nx` is itself a 1-element array, and `np.arange(ny * nx + 1)`
+    # below raises "only 0-dimensional arrays can be converted to Python
+    # scalars" -- this is exactly the traceback from this function. Cast to
+    # scalars up front, the same fix already applied in `integrate_hp_on_wcs`
+    # (there via `geom_image.data_shape`) and `integrate_dirac_delta_on_wcs`.
+    nx, ny = (int(np.ravel(v)[0]) for v in geom_image.npix)
+    idx_i, idx_j, inside = _hp_pixels_to_wcs_idx(geom_image, dec_hp, ra_hp)
+    ipix = np.arange(len(ra_hp))[inside]
+    flat = idx_i[inside] * nx + idx_j[inside]
 
-    n_i, n_j   = len(bin_edges_ra) - 1, len(bin_edges_ra[0]) - 1
-    bin_pixels = np.empty((n_i, n_j), dtype=object)
-    mask_added = np.zeros(len(ipix), dtype=bool)
+    # Group HEALPix indices by WCS bin via a single sort, instead of an
+    # O(n_i * n_j) boolean mask over all footprint pixels for every bin.
+    order       = np.argsort(flat, kind="stable")
+    flat_sorted = flat[order]
+    ipix_sorted = ipix[order]
+    bounds      = np.searchsorted(flat_sorted, np.arange(ny * nx + 1))
 
-    for i in range(n_i):
-        for j in range(n_j):
-            mask_bin = (
-                (ra_hp_wcs  >= bin_edges_ra[i, j+1])  &
-                (dec_hp_wcs >= bin_edges_dec[i, j])   &
-                (ra_hp_wcs  <= bin_edges_ra[i, j])    &
-                (dec_hp_wcs <= bin_edges_dec[i+1, j+1])
-            ) & ~mask_added
-            bin_pixels[i, j] = ipix[mask_bin]
-            mask_added |= mask_bin
+    bin_pixels = np.empty((ny, nx), dtype=object)
+    for k in range(ny * nx):
+        i, j = divmod(k, nx)
+        bin_pixels[i, j] = ipix_sorted[bounds[k]:bounds[k + 1]]
 
     # WCS bins smaller than a HEALPix pixel can end up empty -> nearest pixel
     if fill_empty:
         if nside is None:
             raise ValueError("nside required when fill_empty=True")
-        empty = [(i, j) for i in range(n_i) for j in range(n_j)
+        empty = [(i, j) for i in range(ny) for j in range(nx)
                  if bin_pixels[i, j].size == 0]
         if empty:
-            ii  = np.array([e[0] for e in empty])
-            jj  = np.array([e[1] for e in empty])
-            # bin centres from the edges (same wrapping as above)
-            c_ra  = 0.5 * (bin_edges_ra[ii, jj]  + bin_edges_ra[ii, jj+1])
-            c_dec = 0.5 * (bin_edges_dec[ii, jj] + bin_edges_dec[ii+1, jj+1])
-            ipix_near = hp.ang2pix(nside, np.radians(90 - c_dec),
-                                   np.radians(-c_ra % 360))
+            ii = np.array([e[0] for e in empty])
+            jj = np.array([e[1] for e in empty])
+            lon, lat = geom_image.pix_to_coord((jj, ii))   # (ra, dec) of bin centres
+            ipix_near = hp.ang2pix(nside, np.radians(90 - lat.value),
+                                   np.radians(-lon.value % 360))
             for k, (i, j) in enumerate(empty):
                 bin_pixels[i, j] = np.array([ipix_near[k]])
     return bin_pixels
