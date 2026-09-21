@@ -51,7 +51,13 @@ below.
 ```bash
 conda env create -f environment.yml
 conda activate gw-gamma-global-uls
+python -m ipykernel install --user --name gw-gamma-global-uls --display-name "Python (gw-gamma-global-uls)"
 ```
+
+In VS Code, select `Python (gw-gamma-global-uls)` as the notebook kernel. Do not
+use the `base` kernel for the 3D notebook: `ligo.skymap` contains a compiled
+extension, and mixing its binary dependencies with an unrelated Python 3.13
+environment can terminate the kernel instead of raising a Python exception.
 
 Notebooks import the library as `from gwuls import simulate, utils, plotting, paths`
 after inserting the repo root on `sys.path` (see the first cell of each notebook) —
