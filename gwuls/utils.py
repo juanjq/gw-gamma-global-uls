@@ -1,3 +1,5 @@
+"""HEALPix / GW-map / distance-CDF helpers shared by the 2D and 3D notebooks."""
+
 import numpy as np
 import glob, os
 import matplotlib.pyplot as plt

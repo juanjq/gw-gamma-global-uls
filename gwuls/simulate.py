@@ -59,6 +59,11 @@ import numpy as np
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 
+try:
+    from . import paths
+except ImportError:                                     # run as a standalone script
+    import paths
+
 # gammapy is required for the simulation machinery, but *not* for Section 1, so
 # that the spectral conversions can be imported and unit-tested standalone.
 try:
@@ -1587,7 +1592,7 @@ def run_iterative_ul(
     energy_edges, cl, n_sim=500, precision=0.05, frac_tol=0.01,
     amp_lo=1e-13, amp_hi=1e-10, max_iter=20, cache_path=None,
     spectral_index=2.0, e_ref=E_REF, seed=None, position_seed=12345,
-    tmp_dir="./data/tmp", check_bracket=True, make_plots=True, verbose=True,
+    tmp_dir=str(paths.TMP_DIR), check_bracket=True, make_plots=True, verbose=True,
 ):
     """
     2D flux upper limit: bisect the PWL amplitude until a fraction `cl` of
@@ -1695,7 +1700,7 @@ def run_iterative_ul_3d(
     cl, n_sim=500, precision=0.05, frac_tol=0.01, lum_lo=1e45, lum_hi=1e52,
     max_iter=20, cache_path=None, spectral_index=2.0, e_ref=E_REF, seed=None,
     sampling_seed=12345, luminosity_band=None, apply_k_correction=False,
-    restrict_to_mask=False, tmp_dir="./data/tmp", check_bracket=True, verbose=True,
+    restrict_to_mask=False, tmp_dir=str(paths.TMP_DIR), check_bracket=True, verbose=True,
 ):
     """
     3D luminosity upper limit: same bisection, on the isotropic-equivalent

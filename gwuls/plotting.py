@@ -1,3 +1,5 @@
+"""Shared diagnostic plots for the 2D and 3D notebooks."""
+
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle

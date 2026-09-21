@@ -1,0 +1,17 @@
+name: gw-gamma-global-uls
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10
+  - numpy
+  - scipy
+  - matplotlib
+  - astropy
+  - healpy
+  - regions
+  - uncertainties
+  - jupyterlab
+  - pip
+  - pip:
+      - gammapy
+      - ligo.skymap

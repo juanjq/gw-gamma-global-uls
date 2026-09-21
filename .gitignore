@@ -1,6 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Jupyter
+.ipynb_checkpoints/
+.virtual_documents/
+run_*.ipynb
+
+# Generated data / outputs (regenerable on either machine, never for git)
+data/tmp/
+data/slurm_output/
+outputs/
 *.pkl
 *.npz
 *.out
-**__pycache__**
-**.ipynb_checkpoints**
-**run_*.ipynb
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Env
+.env
