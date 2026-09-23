@@ -413,21 +413,29 @@ def summary_bkg_simulations(geom, bin_edges_ra, bin_edges_dec, data_ligo_2d, thr
 
 def plot_distance_prior_summary(r_grid, cdf_table, cdf_valid, prob_gw_integrated,
                                 mask_threshold_95, dist_med, dist_lo, dist_hi,
-                                n_pix_per_bin, save_path=None):
+                                n_pix_per_bin, save_path=None, pdf_bins="mask"):
     """
-    4-panel distance-prior diagnostic: median / 90%-width / HEALPix-density
-    maps, plus every valid WCS bin's own distance PDF inside the 95% mask
-    (transparency by GW weight), with their probability-weighted mixture.
+    4-panel (2x2) distance-prior diagnostic: median / 90%-width / HEALPix-density
+    maps, plus per-bin distance PDFs (transparency by GW weight) and their
+    probability-weighted mixture.
 
-    Returns the mixture PDF itself (`pdf_gw_mask`, evaluated on `r_grid`),
-    so callers can reuse the exact curve plotted here.
+    pdf_bins : {"mask", "all"}
+        Which bins' PDFs are drawn in panel 4: only those in the 95% mask, or
+        every bin with a usable CDF (then the all-bins mixture is overlaid too).
+
+    Returns the 95%-mask mixture PDF (`pdf_gw_mask`, on `r_grid`) regardless of
+    `pdf_bins`, so callers can reuse the exact curve plotted here.
     """
+    if pdf_bins not in ("mask", "all"):
+        raise ValueError(f"pdf_bins must be 'mask' or 'all', got {pdf_bins!r}")
+    in_mask = pdf_bins == "mask"
+
     dist_med_m = np.where(cdf_valid, dist_med, np.nan)
     dist_lo_m  = np.where(cdf_valid, dist_lo,  np.nan)
     dist_hi_m  = np.where(cdf_valid, dist_hi,  np.nan)
     width90_m  = dist_hi_m - dist_lo_m
 
-    fig, ax = plt.subplots(1, 4, figsize=(19, 4))
+    fig, ax = plt.subplots(2, 2, figsize=(7, 6)); ax = ax.ravel()
     im = ax[0].imshow(dist_med_m.T, origin="lower", cmap="viridis")
     plt.colorbar(im, ax=ax[0], label="median distance [Mpc]")
     im = ax[1].imshow(width90_m.T, origin="lower", cmap="magma")
@@ -435,28 +443,34 @@ def plot_distance_prior_summary(r_grid, cdf_table, cdf_valid, prob_gw_integrated
     im = ax[2].imshow(n_pix_per_bin.T, origin="lower", cmap="cividis")
     plt.colorbar(im, ax=ax[2], label="HEALPix pixels / WCS bin")
 
+    # Bins in the 95% mask (-> returned mixture) and bins drawn (mask or all valid)
     mask_pdf = mask_threshold_95 & cdf_valid & (prob_gw_integrated > 0)
-    pdf_weights = np.where(mask_pdf, prob_gw_integrated, 0.0).astype(float)
-    pdf_weights /= pdf_weights.sum()
+    show = mask_pdf if in_mask else cdf_valid
+    w_mask = np.where(mask_pdf, prob_gw_integrated, 0.0).astype(float); w_mask /= w_mask.sum()
+    w_show = np.where(show,     prob_gw_integrated, 0.0).astype(float); w_show /= w_show.sum()
+    alpha = 0.04 + 0.56 * w_show / (w_show.max() or 1)
+
     pdf_mask = np.zeros_like(cdf_table, dtype=float)
-    max_weight = pdf_weights.max()
-    for i, j in np.ndindex(cdf_table.shape[:2]):
+    for i, j in np.argwhere(show):
         pdf = np.gradient(cdf_table[i, j].astype(float), r_grid)
         area = np.trapezoid(pdf, r_grid)
         if area > 0 and np.isfinite(area):
             pdf_mask[i, j] = pdf / area
-            alpha = 0.04 + 0.56 * pdf_weights[i, j] / max_weight if max_weight > 0 else 0.04
-            ax[3].plot(r_grid, pdf_mask[i, j], color="tab:blue", alpha=alpha, lw=0.8)
+            ax[3].plot(r_grid, pdf_mask[i, j], color="tab:blue", alpha=alpha[i, j], lw=0.8)
 
-    pdf_gw_mask = np.sum(pdf_mask * pdf_weights[:, :, None], axis=(0, 1))
-    ax[3].plot(r_grid, pdf_gw_mask, color="k", lw=1.5, ls="--", label="GW-weighted mixture")
+    mix = lambda w: np.sum(pdf_mask * w[:, :, None], axis=(0, 1))
+    pdf_gw_mask, pdf_show = mix(w_mask), mix(w_show)
+    ax[3].plot(r_grid, pdf_gw_mask, "k--", lw=1.5, label="GW-weighted mixture (95% mask)")
+    if not in_mask:
+        ax[3].plot(r_grid, pdf_show, ":", color="tab:red", lw=1.5, label="GW-weighted mixture (all bins)")
     ax[3].set_xlabel("r [Mpc]"); ax[3].set_ylabel("p(r)")
     ax[3].legend(frameon=False, fontsize=8, loc=0)
 
-    mean = np.trapezoid(r_grid * pdf_gw_mask, r_grid)
-    std = np.sqrt(np.trapezoid((r_grid - mean) ** 2 * pdf_gw_mask, r_grid))
+    mean = np.trapezoid(r_grid * pdf_show, r_grid)
+    std = np.sqrt(np.trapezoid((r_grid - mean) ** 2 * pdf_show, r_grid))
     clipped_bounds = np.clip((mean - 4 * std, mean + 4 * std), r_grid[0], r_grid[-1])
-    ax[3].set(title=f"Distance PDFs in 95% mask ({mask_pdf.sum()} bins)", xlim=clipped_bounds)
+    where = "in 95% mask" if in_mask else "in all valid bins"
+    ax[3].set(title=f"Distance PDFs {where} ({show.sum()} bins)", xlim=clipped_bounds)
 
     for a in ax[:3]:
         try:
