@@ -84,14 +84,21 @@ try:
 except ImportError:                                     # pragma: no cover
     _HAS_GAMMAPY = False
 
+_UTILS_IMPORT_ERROR = None
 try:
-    from utils import IndexToDeclRa
-except ImportError:                                     # pragma: no cover
-    IndexToDeclRa = None
+    from .utils import IndexToDeclRa
+except ImportError as _exc:                             # run as a standalone script
+    try:
+        from utils import IndexToDeclRa
+    except ImportError as _exc2:                        # pragma: no cover
+        IndexToDeclRa, _UTILS_IMPORT_ERROR = None, f"{_exc!r} / {_exc2!r}"
 try:
-    from plotting import plot_ul_iteration
-except ImportError:                                     # pragma: no cover
-    plot_ul_iteration = None
+    from .plotting import plot_ul_iteration
+except ImportError:                                     # run as a standalone script
+    try:
+        from plotting import plot_ul_iteration
+    except ImportError:                                 # pragma: no cover
+        plot_ul_iteration = None
 
 
 __all__ = [
@@ -808,7 +815,10 @@ def _map_healpix_to_wcs_bins(lvk_prob_hp, bin_c_ra, bin_c_dec, mask_threshold,
     rather than a silently wrong mask.
     """
     if IndexToDeclRa is None:
-        raise ImportError("utils.IndexToDeclRa is required for the 2D sampler.")
+        raise ImportError(
+            "utils.IndexToDeclRa is required for the 2D sampler; the import of "
+            f"gwuls.utils failed with: {_UTILS_IMPORT_ERROR}"
+        )
 
     n_pix = len(lvk_prob_hp)
     pix_indices, nside = np.arange(n_pix), hp.npix2nside(n_pix)

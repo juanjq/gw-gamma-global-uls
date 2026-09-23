@@ -287,7 +287,7 @@ def summary_bkg_simulations(geom, bin_edges_ra, bin_edges_dec, data_ligo_2d, thr
                              lambda_bkg, lambda_real, lambda_bkg_m, p_value, significance,
                              map_lambda_bkg, map_ts_bkg, map_source_sim, energy_edges, bins_lambda):
 
-    fig = plt.figure(figsize=(7, 5))
+    fig = plt.figure(figsize=(7, 6))
     gs  = GridSpec(2, 3, figure=fig, height_ratios=[2, 1])
     axt = fig.add_subplot(gs[0, :])
     ax1 = fig.add_subplot(gs[1, 0], projection=geom.wcs)
@@ -300,7 +300,7 @@ def summary_bkg_simulations(geom, bin_edges_ra, bin_edges_dec, data_ligo_2d, thr
     axt.axvline(lambda_real,  color="k",        ls="--", label=f"Real data\n$\\Lambda=${lambda_real:.2f}")
     axt.axvline(lambda_bkg_m, color="darkblue", ls=":",  label=f"BKG median\n$\\Lambda=${lambda_bkg_m:.2f}")
     axt.text(0.85, 0.87, f"p-value={p_value:.2f}\nsignificance={significance:.2f} $\\sigma$",
-             ha="center", va="center", transform=axt.transAxes)
+             ha="right", va="center", transform=axt.transAxes)
     axt.set(xlabel=r"$\Lambda$", ylabel="Normalized counts",
             title=f"{energy_edges[0]:.2f}–{energy_edges[1]:.2f}")
     axt.legend(frameon=False, loc=4)
@@ -309,7 +309,7 @@ def summary_bkg_simulations(geom, bin_edges_ra, bin_edges_dec, data_ligo_2d, thr
     panels = [
         (ax1, "magma",   map_lambda_bkg,  r"$\Lambda_{BKG}$ ($TS'_{max}$)"),
         (ax2, "magma",   map_ts_bkg,      r"$TS_{max}$"),
-        (ax3, "cividis", map_source_sim,  r"Source positions $(F=0)$"),
+        (ax3, "cividis", map_source_sim,  r"Injected source $(F=0)$"),
     ]
     for ax, cmap, mapa, title in panels:
         ax.pcolormesh(bin_edges_ra, bin_edges_dec, mapa.data,
