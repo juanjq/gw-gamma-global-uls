@@ -15,6 +15,7 @@ dependencies:
   - regions
   - uncertainties
   - jupyterlab
+  - tqdm
   - pip
   - pip:
       - gammapy

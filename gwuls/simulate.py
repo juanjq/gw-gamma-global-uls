@@ -53,6 +53,7 @@ from __future__ import annotations
 import os
 import pickle
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 
 import numpy as np
@@ -63,6 +64,11 @@ try:
     from . import paths
 except ImportError:                                     # run as a standalone script
     import paths
+
+try:
+    from tqdm.auto import tqdm as _tqdm
+except ImportError:                                     # pragma: no cover
+    _tqdm = None
 
 # gammapy is required for the simulation machinery, but *not* for Section 1, so
 # that the spectral conversions can be imported and unit-tested standalone.
@@ -115,7 +121,7 @@ __all__ = [
     "perform_n_simulations", "perform_n_simulations_3d",
     "sample_sky_and_distance", "check_3d_sampling",
     # Section 6-7 -- upper limits and reporting
-    "run_iterative_ul", "run_iterative_ul_3d",
+    "run_iterative_ul", "run_iterative_ul_3d", "geometric_n_sim_schedule",
     "luminosity_ul_from_flux_ul", "summarize_upper_limits", "compare_2d_3d",
 ]
 
@@ -799,6 +805,177 @@ def _pack_results(results, extra, file_output):
 
 
 # ===========================================================================
+# 3b. Running n_sim realisations: sequential or parallel, with progress
+# ===========================================================================
+#
+# Both `perform_n_simulations` and `perform_n_simulations_3d` reduce to "for
+# each realisation i, inject a source at (coords[i], amplitude[i]), fake the
+# dataset with seed `base_seed + i`, and record Lambda". Everything below is
+# that loop, made shareable and optionally parallel across processes.
+#
+# Parallelism is per amplitude/luminosity step, not across bisection steps:
+# `run_iterative_ul[_3d]` still calls one step after the next, and each call
+# to `perform_n_simulations[_3d]` -- sequential or parallel -- only returns
+# once every one of its `n_sim` realisations has completed. That is what
+# guarantees the bisection never looks at a partial Lambda sample.
+
+class _NullProgress:
+    """No-op stand-in for tqdm, used when verbose=False or tqdm is absent."""
+    def update(self, n=1):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _progress(total, desc, disable=False):
+    if _tqdm is None or disable:
+        return _NullProgress()
+    return _tqdm(total=total, desc=desc, unit="sim", leave=False)
+
+
+def _resolve_n_jobs(n_jobs):
+    """None/0/1 -> sequential. Negative -> all available CPUs. int -> that many."""
+    if n_jobs is None:
+        return 1
+    n_jobs = int(n_jobs)
+    if n_jobs < 0:
+        return max(1, os.cpu_count() or 1)
+    return max(1, n_jobs)
+
+
+def _simulate_realisations(engine, coords, amp_arr, global_indices, spectral_index,
+                           e_ref, base_seed, model_name, compute_uls,
+                           store_ts_maps, store_stats, progress=None):
+    """
+    Run one realisation per (coords[k], amp_arr[k]) pair, seeded by
+    `base_seed + global_indices[k]`, on an already-built `engine`.
+
+    Seeding by the GLOBAL index (rather than the local position in `coords`)
+    is what lets a chunk of a larger run -- as used by the parallel path
+    below -- reproduce exactly the realisations a sequential run over the
+    same indices would have produced.
+    """
+    results = {k: [] for k in ("lambda_data", "lambda_ra", "lambda_dec", "tsmax",
+                               "tsmax_ra", "tsmax_dec")}
+    if store_ts_maps:
+        results.update({"ts_dist": [], "ts2_dist": []})
+    if store_stats:
+        results["stats"] = []
+    if compute_uls:
+        results.update({"ulmax": [], "ulmax_ra": [], "ulmax_dec": [], "ul_dist": []})
+
+    for k, gi in enumerate(global_indices):
+        engine.dataset.models = _make_source_model(
+            coords[k], amp_arr[k], spectral_index, e_ref, name=model_name)
+        engine.dataset.fake(base_seed + gi)
+        engine.dataset.models = None          # do not treat the signal as known bkg
+
+        stats = engine.counts_statistics()
+        ts, ts2 = engine.ts_maps(stats)
+        for key, value in engine.lambda_from(ts, ts2).items():
+            results[key].append(value)
+        if store_ts_maps:
+            results["ts_dist"].append(ts)
+            results["ts2_dist"].append(ts2)
+        if store_stats:
+            results["stats"].append(stats)
+        if compute_uls:
+            ul_map, ul_info = engine.flux_ul_map()
+            for key, value in ul_info.items():
+                results[key].append(value)
+            results["ul_dist"].append(ul_map)
+        if progress is not None:
+            progress.update(1)
+    return results
+
+
+def _simulate_chunk_worker(payload):
+    """
+    Top-level (picklable) worker for the parallel path: rebuilds its own
+    engine from `file_input` -- cheap relative to `n_sim` realisations -- so
+    that only plain arrays, not gammapy objects, cross the process boundary.
+    """
+    (file_input, mode, chunk_start, ra_chunk, dec_chunk, amp_chunk,
+     spectral_index, e_ref, base_seed, model_name, compute_uls,
+     store_ts_maps, store_stats) = payload
+
+    data, _ = load_simulation_input(file_input, mode=mode, verbose=False)
+    engine = _TSEngine(data["dataset"], data["excess_estimator"], data["prob_gw"],
+                       data["mask_threshold_95"], data["containment_factor"])
+    coords = SkyCoord(ra=np.asarray(ra_chunk) * u.deg,
+                      dec=np.asarray(dec_chunk) * u.deg, frame="icrs")
+    global_indices = range(chunk_start, chunk_start + len(ra_chunk))
+
+    results = _simulate_realisations(
+        engine, coords, np.asarray(amp_chunk), global_indices, spectral_index,
+        e_ref, base_seed, model_name, compute_uls, store_ts_maps, store_stats)
+    return chunk_start, results
+
+
+def _run_simulations(file_input, mode, engine, coords, amp_arr, spectral_index,
+                     e_ref, base_seed, model_name, compute_uls, store_ts_maps,
+                     store_stats, n_jobs=1, verbose=True):
+    """
+    Run all `len(coords)` realisations, sequentially (n_jobs=1, the default --
+    identical to the old inline loop) or split across `n_jobs` worker
+    processes. Either way this call blocks until every realisation has
+    completed before returning, so the caller never sees a partial sample.
+    """
+    n_sim = len(coords)
+    n_jobs = _resolve_n_jobs(n_jobs)
+
+    if n_jobs <= 1:
+        with _progress(n_sim, "Simulating", disable=not verbose) as pbar:
+            return _simulate_realisations(
+                engine, coords, amp_arr, range(n_sim), spectral_index, e_ref,
+                base_seed, model_name, compute_uls, store_ts_maps, store_stats,
+                progress=pbar)
+
+    # --- parallel path -----------------------------------------------------
+    if verbose and (store_ts_maps or store_stats):
+        print("  NOTE: store_ts_maps/store_stats with n_jobs > 1 ships full TS "
+              "maps / stats objects back from every worker process; for large "
+              "maps this IPC cost can outweigh the parallel speed-up. Prefer "
+              "n_jobs=1 for runs that need per-iteration maps.")
+
+    # A handful of chunks per worker keeps the progress bar responsive
+    # without submitting one task per realisation.
+    n_chunks = max(n_jobs, min(n_sim, 4 * n_jobs))
+    chunk_size = max(1, -(-n_sim // n_chunks))          # ceil division
+    starts = list(range(0, n_sim, chunk_size))
+
+    ra_all, dec_all = coords.ra.deg, coords.dec.deg
+    payloads = [
+        (file_input, mode, s, ra_all[s:s + chunk_size], dec_all[s:s + chunk_size],
+         amp_arr[s:s + chunk_size], spectral_index, e_ref, base_seed, model_name,
+         compute_uls, store_ts_maps, store_stats)
+        for s in starts
+    ]
+
+    chunks = {}
+    with ProcessPoolExecutor(max_workers=n_jobs) as pool:
+        futures = [pool.submit(_simulate_chunk_worker, p) for p in payloads]
+        with _progress(n_sim, f"Simulating ({n_jobs} workers)", disable=not verbose) as pbar:
+            for fut in as_completed(futures):
+                start, res = fut.result()               # re-raises worker exceptions here
+                chunks[start] = res
+                pbar.update(len(res["lambda_data"]))
+    # `pool` has joined all workers by this point (context-manager exit), and
+    # every future has been consumed above -- nothing proceeds on a partial
+    # batch.
+
+    merged = {}
+    for s in starts:                                    # restore global-index order
+        for key, values in chunks[s].items():
+            merged.setdefault(key, []).extend(values)
+    return merged
+
+
+# ===========================================================================
 # 4. 2D simulation: fixed flux, sampled sky position
 # ===========================================================================
 
@@ -879,7 +1056,7 @@ def _map_healpix_to_wcs_bins(lvk_prob_hp, bin_c_ra, bin_c_dec, mask_threshold,
 def perform_n_simulations(
     n_sim, amplitude, file_input, file_output, compute_uls=0,
     spectral_index=2.0, e_ref=E_REF, seed=None, position_seed=12345,
-    store_ts_maps=True, store_stats=True, verbose=True,
+    store_ts_maps=True, store_stats=True, n_jobs=1, verbose=True,
 ):
     """
     2D method: inject a fixed PWL amplitude at a sky position drawn from the
@@ -911,6 +1088,13 @@ def perform_n_simulations(
     store_ts_maps, store_stats : bool
         Keep full per-iteration TS maps / counts-statistics objects. Each is
         O(n_sim x n_pix); turn them off for large runs (the bisection does).
+    n_jobs : int
+        1 (default) runs the `n_sim` realisations sequentially, exactly as
+        before. >1 splits them across that many worker processes; -1 uses
+        every available CPU. The seed of realisation i is `base_seed + i`
+        regardless of how the work is split, so the Lambda sample -- and
+        therefore any upper limit derived from it -- does not depend on
+        `n_jobs`; only the wall-clock time does.
     """
     n_sim = int(n_sim)
     compute_uls = bool(compute_uls)
@@ -940,39 +1124,12 @@ def perform_n_simulations(
                 amplitude, data["energy_edges"], spectral_index, e_ref)).splitlines():
             print(f"    {line}")
 
-    results = {k: [] for k in ("lambda_data", "lambda_ra", "lambda_dec", "tsmax",
-                               "tsmax_ra", "tsmax_dec")}
-    if store_ts_maps:
-        results.update({"ts_dist": [], "ts2_dist": []})
-    if store_stats:
-        results["stats"] = []
-    if compute_uls:
-        results.update({"ulmax": [], "ulmax_ra": [], "ulmax_dec": [], "ul_dist": []})
-
     base_seed = 0 if seed is None else int(seed)
-
-    for i in range(n_sim):
-        print(f"Computing... {i+1}/{n_sim}", end="\r")
-
-        engine.dataset.models = _make_source_model(
-            sim_coords[i], amplitude, spectral_index, e_ref)
-        engine.dataset.fake(base_seed + i)
-        engine.dataset.models = None          # do not treat the signal as known bkg
-
-        stats = engine.counts_statistics()
-        ts, ts2 = engine.ts_maps(stats)
-        for key, value in engine.lambda_from(ts, ts2).items():
-            results[key].append(value)
-        if store_ts_maps:
-            results["ts_dist"].append(ts)
-            results["ts2_dist"].append(ts2)
-        if store_stats:
-            results["stats"].append(stats)
-        if compute_uls:
-            ul_map, ul_info = engine.flux_ul_map()
-            for key, value in ul_info.items():
-                results[key].append(value)
-            results["ul_dist"].append(ul_map)
+    amp_arr = np.full(n_sim, float(amplitude))
+    results = _run_simulations(
+        file_input, "2d", engine, sim_coords, amp_arr, spectral_index, e_ref,
+        base_seed, "model-simulated", compute_uls, store_ts_maps, store_stats,
+        n_jobs=n_jobs, verbose=verbose)
 
     _pack_results(results, {
         "f_ra": np.asarray(ra_sim), "f_dec": np.asarray(dec_sim),
@@ -1043,7 +1200,7 @@ def perform_n_simulations_3d(
     n_sim, luminosity, file_input, file_output, compute_uls=0,
     spectral_index=2.0, e_ref=E_REF, seed=None, sampling_seed=12345,
     luminosity_band=None, apply_k_correction=False, restrict_to_mask=False,
-    store_ts_maps=False, store_stats=False, verbose=True,
+    store_ts_maps=False, store_stats=False, n_jobs=1, verbose=True,
 ):
     """
     3D method: fix an isotropic-equivalent BAND luminosity L0 [erg/s] and, per
@@ -1074,6 +1231,11 @@ def perform_n_simulations_3d(
         L0 values tested during a bisection use the *same* sky/distance
         realisations (common random numbers), which is what makes the fraction
         curve smooth in L0.
+    n_jobs : int
+        1 (default) runs sequentially; >1 splits the `n_sim` realisations
+        across that many worker processes; -1 uses every available CPU. See
+        `perform_n_simulations` -- the Lambda sample does not depend on
+        `n_jobs`, only the wall-clock time does.
     """
     n_sim = int(n_sim)
     compute_uls = bool(compute_uls)
@@ -1135,39 +1297,11 @@ def perform_n_simulations_3d(
 
     sim_coords = SkyCoord(ra=draw["ra"] * u.deg, dec=draw["dec"] * u.deg, frame="icrs")
 
-    results = {k: [] for k in ("lambda_data", "lambda_ra", "lambda_dec", "tsmax",
-                               "tsmax_ra", "tsmax_dec")}
-    if store_ts_maps:
-        results.update({"ts_dist": [], "ts2_dist": []})
-    if store_stats:
-        results["stats"] = []
-    if compute_uls:
-        results.update({"ulmax": [], "ulmax_ra": [], "ulmax_dec": [], "ul_dist": []})
-
     base_seed = 0 if seed is None else int(seed)
-
-    for i in range(n_sim):
-        print(f"Computing... {i+1}/{n_sim}", end="\r")
-
-        engine.dataset.models = _make_source_model(
-            sim_coords[i], amp_sim[i], spectral_index, e_ref, name="model-simulated-3d")
-        engine.dataset.fake(base_seed + i)
-        engine.dataset.models = None
-
-        stats = engine.counts_statistics()
-        ts, ts2 = engine.ts_maps(stats)
-        for key, value in engine.lambda_from(ts, ts2).items():
-            results[key].append(value)
-        if store_ts_maps:
-            results["ts_dist"].append(ts)
-            results["ts2_dist"].append(ts2)
-        if store_stats:
-            results["stats"].append(stats)
-        if compute_uls:
-            ul_map, ul_info = engine.flux_ul_map()
-            for key, value in ul_info.items():
-                results[key].append(value)
-            results["ul_dist"].append(ul_map)
+    results = _run_simulations(
+        file_input, "3d", engine, sim_coords, amp_sim, spectral_index, e_ref,
+        base_seed, "model-simulated-3d", compute_uls, store_ts_maps, store_stats,
+        n_jobs=n_jobs, verbose=verbose)
 
     _pack_results(results, {
         "f_ra": np.asarray(draw["ra"]), "f_dec": np.asarray(draw["dec"]),
@@ -1370,6 +1504,23 @@ def check_3d_sampling(file_input, n_sim=20000, seed=7, restrict_to_mask=False,
 # 6. Shared bisection engine for the upper limit
 # ===========================================================================
 
+def geometric_n_sim_schedule(n_min, n_max, growth=2.0):
+    """
+    Ready-made `n_sim_schedule` for `run_iterative_ul[_3d]`: `n_min` at
+    iteration 0, multiplying by `growth` each step up to `n_max`.
+
+    Coarse early steps are cheap and only need to get the *sign* of
+    frac - cl right to halve the bracket; only the last few steps -- which
+    decide the quoted number -- need `n_max`'s precision. Combined with
+    `n_jobs`, this is the main lever for a much faster bisection.
+    """
+    n_min, n_max = int(n_min), int(n_max)
+
+    def schedule(iteration):
+        return int(min(n_max, n_min * growth ** iteration))
+    return schedule
+
+
 def _binomial_error(frac, n, floor=1e-6):
     """Standard error on a fraction, with a floor so 0 and 1 stay usable."""
     frac = np.clip(np.asarray(frac, dtype=float), 0.0, 1.0)
@@ -1422,13 +1573,14 @@ def _interpolate_crossing(x_vals, frac_vals, n_vals, cl):
 
 def _bisect_ul(evaluate, x_lo, x_hi, cl, target, precision, frac_tol, max_iter,
                label="x", unit="", lambda_cache=None, cache_path=None,
-               check_bracket=True, n_sigma_stop=2.0, on_iteration=None, verbose=True):
+               check_bracket=True, n_sigma_stop=2.0, on_iteration=None,
+               n_sim_schedule=None, verbose=True):
     """
     Bisection in log10(x) for the value of x at which
     P(Lambda_sim > target) = cl. Shared by the 2D and 3D upper limits.
 
-    `evaluate(x) -> ndarray of Lambda` must be deterministic and cached by the
-    caller (it is, via `lambda_cache`).
+    `evaluate(x, n_sim=None) -> ndarray of Lambda` must be deterministic and
+    cached by the caller (it is, via `lambda_cache`).
 
     Improvements over the previous per-method loops:
       * the initial bracket is verified to actually contain the crossing
@@ -1441,12 +1593,21 @@ def _bisect_ul(evaluate, x_lo, x_hi, cl, target, precision, frac_tol, max_iter,
       * the final value comes from interpolating the fraction curve, with a
         1 sigma statistical uncertainty, not just sqrt(lo*hi),
       * monotonicity of the fraction curve is checked and reported.
+
+    n_sim_schedule : callable(iteration) -> int, or None
+        Optional. When given, the number of realisations used for bisection
+        step `iteration` (0-based; the two bracket checks both use step 0)
+        comes from this instead of the fixed n_sim baked into `evaluate`.
+        Coarse-then-fine schedules (few realisations while the bracket is
+        still wide, more once it has narrowed) reach the same precision in
+        less total simulation time than a constant n_sim throughout, at the
+        cost of a noisier -- but still unbiased -- `frac` in the early steps.
     """
     lambda_cache = {} if lambda_cache is None else lambda_cache
     history = {"x": [], "frac": [], "err": [], "n": [], "lo": [], "hi": []}
 
-    def _frac_at(x):
-        lam = evaluate(x)
+    def _frac_at(x, n_sim=None):
+        lam = evaluate(x, n_sim=n_sim) if n_sim is not None else evaluate(x)
         lam = np.asarray(lam, dtype=float)
         lam = lam[np.isfinite(lam)]
         if lam.size == 0:
@@ -1462,8 +1623,9 @@ def _bisect_ul(evaluate, x_lo, x_hi, cl, target, precision, frac_tol, max_iter,
     # --- bracket verification ------------------------------------------
     bracket_warning = None
     if check_bracket:
-        f_lo, n_lo = _frac_at(x_lo)
-        f_hi, n_hi = _frac_at(x_hi)
+        _n0 = n_sim_schedule(0) if n_sim_schedule is not None else None
+        f_lo, n_lo = _frac_at(x_lo, _n0)
+        f_hi, n_hi = _frac_at(x_hi, _n0)
         _record(x_lo, f_lo, n_lo, x_lo, x_hi)
         _record(x_hi, f_hi, n_hi, x_lo, x_hi)
         if verbose:
@@ -1486,7 +1648,8 @@ def _bisect_ul(evaluate, x_lo, x_hi, cl, target, precision, frac_tol, max_iter,
     converged = False
     for iteration in range(max_iter):
         x_mid = np.sqrt(x_lo * x_hi)
-        frac, n_eff = _frac_at(x_mid)
+        _n = n_sim_schedule(iteration) if n_sim_schedule is not None else None
+        frac, n_eff = _frac_at(x_mid, _n)
         err = float(_binomial_error(frac, n_eff))
 
         if frac > cl:
@@ -1566,15 +1729,23 @@ def _bisect_ul(evaluate, x_lo, x_hi, cl, target, precision, frac_tol, max_iter,
 
 
 def _cached_evaluator(simulate_fn, lambda_cache, cache_path, tag, verbose=True):
-    """Wrap a simulation call with the on-disk / in-memory Lambda cache."""
-    def evaluate(x):
+    """
+    Wrap a simulation call with the on-disk / in-memory Lambda cache.
+
+    `simulate_fn` and the returned `evaluate` both take an optional `n_sim`
+    override (used by a `_bisect_ul` `n_sim_schedule`); the cache key is
+    still just `x`, since a bisection revisits the same x only at the two
+    bracket endpoints -- a cache hit there simply reuses whatever sample size
+    produced the cached entry.
+    """
+    def evaluate(x, n_sim=None):
         key = f"{x:.6e}"
         if key in lambda_cache:
             if verbose:
                 print(f"  [cache] {tag} = {x:.4e} -- reusing "
                       f"{len(lambda_cache[key])} existing simulations")
             return lambda_cache[key]
-        lambda_cache[key] = simulate_fn(x)
+        lambda_cache[key] = simulate_fn(x, n_sim=n_sim) if n_sim is not None else simulate_fn(x)
         if cache_path is not None:
             os.makedirs(os.path.dirname(os.path.abspath(cache_path)), exist_ok=True)
             with open(cache_path, "wb") as f:
@@ -1602,12 +1773,25 @@ def run_iterative_ul(
     energy_edges, cl, n_sim=500, precision=0.05, frac_tol=0.01,
     amp_lo=1e-13, amp_hi=1e-10, max_iter=20, cache_path=None,
     spectral_index=2.0, e_ref=E_REF, seed=None, position_seed=12345,
-    tmp_dir=str(paths.TMP_DIR), check_bracket=True, make_plots=True, verbose=True,
+    tmp_dir=str(paths.TMP_DIR), check_bracket=True, make_plots=True,
+    n_jobs=1, verbose=True,
 ):
     """
     2D flux upper limit: bisect the PWL amplitude until a fraction `cl` of
     simulated Lambdas exceeds the target (the observed Lambda, or the
     background median when the observation under-fluctuates).
+
+    n_sim : int or callable(iteration) -> int
+        Realisations per bisection step. A plain int (default) reuses it at
+        every step, unchanged from before. Pass a callable for a dynamic
+        schedule -- e.g. `lambda it: min(2000, 200 * 2**it)` starts coarse
+        and grows the sample only once the bracket needs the precision --
+        see `geometric_n_sim_schedule` for a ready-made one.
+    n_jobs : int
+        Forwarded to `perform_n_simulations` for every step: 1 (default) is
+        sequential, >1 parallelises the n_sim realisations of EACH step
+        across that many processes, -1 uses every available CPU. Each step
+        still fully completes before the next amplitude is tested.
 
     Returns a dict containing, among the diagnostics, the full set of
     band-integrated flux quantities implied by the limit (`flux_point`).
@@ -1622,13 +1806,17 @@ def run_iterative_ul(
     lambda_cache = _load_cache(cache_path, verbose)
     os.makedirs(tmp_dir, exist_ok=True)
 
-    def _simulate(amp):
+    n_sim_base = n_sim(0) if callable(n_sim) else int(n_sim)
+    n_sim_schedule = n_sim if callable(n_sim) else None
+
+    def _simulate(amp, n_sim=None):
+        n_sim = n_sim_base if n_sim is None else int(n_sim)
         fname = os.path.join(tmp_dir, f"iterative_ul_{amp:.6e}.npz")
         perform_n_simulations(
             n_sim=n_sim, amplitude=amp, file_input=path_pkl, file_output=fname,
             compute_uls=0, spectral_index=spectral_index, e_ref=e_ref,
             seed=seed, position_seed=position_seed,
-            store_ts_maps=False, store_stats=False, verbose=False,
+            store_ts_maps=False, store_stats=False, n_jobs=n_jobs, verbose=False,
         )
         return np.load(fname)["lambda_data"]
 
@@ -1658,7 +1846,7 @@ def run_iterative_ul(
         evaluate, amp_lo, amp_hi, cl, target, precision, frac_tol, max_iter,
         label="phi0", unit="cm-2 s-1 TeV-1", lambda_cache=lambda_cache,
         cache_path=cache_path, check_bracket=check_bracket,
-        on_iteration=on_iteration, verbose=verbose,
+        on_iteration=on_iteration, n_sim_schedule=n_sim_schedule, verbose=verbose,
     )
 
     amp_final = res["x_ul"]
@@ -1710,7 +1898,8 @@ def run_iterative_ul_3d(
     cl, n_sim=500, precision=0.05, frac_tol=0.01, lum_lo=1e45, lum_hi=1e52,
     max_iter=20, cache_path=None, spectral_index=2.0, e_ref=E_REF, seed=None,
     sampling_seed=12345, luminosity_band=None, apply_k_correction=False,
-    restrict_to_mask=False, tmp_dir=str(paths.TMP_DIR), check_bracket=True, verbose=True,
+    restrict_to_mask=False, tmp_dir=str(paths.TMP_DIR), check_bracket=True,
+    n_jobs=1, verbose=True,
 ):
     """
     3D luminosity upper limit: same bisection, on the isotropic-equivalent
@@ -1721,6 +1910,10 @@ def run_iterative_ul_3d(
     exactly the same convergence criteria and the same crossing estimator --
     previously the 3D loop was a hand-copied variant that had already drifted
     (no bracket check, no MC-aware tolerance, no interpolated crossing).
+
+    n_sim, n_jobs : see `run_iterative_ul` -- both accepted identically here
+        (n_sim as an int or a callable(iteration) -> int schedule; n_jobs to
+        parallelise each step's realisations across processes).
     """
     target = lambda_bkg_m if significance < 0 else lambda_real
     band = luminosity_band
@@ -1739,14 +1932,18 @@ def run_iterative_ul_3d(
     lambda_cache = _load_cache(cache_path, verbose)
     os.makedirs(tmp_dir, exist_ok=True)
 
-    def _simulate(lum):
+    n_sim_base = n_sim(0) if callable(n_sim) else int(n_sim)
+    n_sim_schedule = n_sim if callable(n_sim) else None
+
+    def _simulate(lum, n_sim=None):
+        n_sim = n_sim_base if n_sim is None else int(n_sim)
         fname = os.path.join(tmp_dir, f"iterative_ul3d_{lum:.6e}.npz")
         perform_n_simulations_3d(
             n_sim=n_sim, luminosity=lum, file_input=path_pkl, file_output=fname,
             compute_uls=0, spectral_index=spectral_index, e_ref=e_ref, seed=seed,
             sampling_seed=sampling_seed, luminosity_band=band,
             apply_k_correction=apply_k_correction, restrict_to_mask=restrict_to_mask,
-            store_ts_maps=False, store_stats=False, verbose=False,
+            store_ts_maps=False, store_stats=False, n_jobs=n_jobs, verbose=False,
         )
         return np.load(fname)["lambda_data"]
 
@@ -1755,7 +1952,7 @@ def run_iterative_ul_3d(
     res = _bisect_ul(
         evaluate, lum_lo, lum_hi, cl, target, precision, frac_tol, max_iter,
         label="L0", unit="erg/s", lambda_cache=lambda_cache, cache_path=cache_path,
-        check_bracket=check_bracket, verbose=verbose,
+        check_bracket=check_bracket, n_sim_schedule=n_sim_schedule, verbose=verbose,
     )
 
     lum_final = res["x_ul"]
@@ -2049,6 +2246,9 @@ def _main(argv):
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--no-store-maps", action="store_true",
                         help="Do not keep per-iteration TS maps / stats objects.")
+    parser.add_argument("--n-jobs", type=int, default=1, dest="n_jobs",
+                        help="Worker processes for this grid point's n_sim "
+                             "realisations (-1 = all CPUs on the node).")
     parser.add_argument("--self-test", action="store_true",
                         help="Run the spectral conversion crosschecks and exit.")
     args = parser.parse_args(argv)
@@ -2062,12 +2262,14 @@ def _main(argv):
         perform_n_simulations(
             args.n_sim, args.value, args.file_input, args.file_output,
             compute_uls=args.compute_uls, spectral_index=args.index,
-            seed=args.seed, store_ts_maps=store, store_stats=store)
+            seed=args.seed, store_ts_maps=store, store_stats=store,
+            n_jobs=args.n_jobs)
     else:
         perform_n_simulations_3d(
             args.n_sim, args.value, args.file_input, args.file_output,
             compute_uls=args.compute_uls, spectral_index=args.index,
-            seed=args.seed, store_ts_maps=store, store_stats=store)
+            seed=args.seed, store_ts_maps=store, store_stats=store,
+            n_jobs=args.n_jobs)
 
 
 if __name__ == "__main__":

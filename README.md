@@ -98,6 +98,26 @@ Both notebooks can also sweep a full amplitude/luminosity grid instead of bisect
 `!squeue -u $USER` (or `gwuls.slurm.print_queue()`); pass `dry_run=True` to preview the
 `sbatch` command for one grid point without submitting it.
 
+### Speeding up the iterative bisection
+
+The default (`USE_ITERATIVE_ULS = True`) path runs locally, one bisection step after the
+next, each step simulating `n_sim` realisations at one amplitude/luminosity. Two independent
+knobs make that faster without changing the statistic it estimates:
+
+- **`N_JOBS`** (notebook parameter cell) — forwarded as `n_jobs` to
+  `perform_n_simulations[_3d]` / `run_iterative_ul[_3d]`. `1` is sequential (unchanged
+  behaviour), `>1` splits a step's `n_sim` realisations across that many worker processes,
+  `-1` uses every available CPU. A step's realisations are seeded by their global index
+  regardless of how the work is split, so the Lambda sample — and the resulting upper limit
+  — is identical for any `N_JOBS`; only the wall-clock time changes. A step never returns
+  until all of its realisations (sequential or parallel) have finished, so the bisection
+  never advances on a partial sample.
+- **`USE_DYNAMIC_N_SIM`** — when `True`, `n_sim` ramps up geometrically from a coarse value
+  to the full one as the bisection bracket narrows (`gwuls.simulate.geometric_n_sim_schedule`),
+  instead of using the full `n_sim` at every step. Early steps only need the *sign* of
+  `frac - CL` to halve the bracket, not its precision, so they can be cheap; only the last
+  few steps, which set the quoted number, pay for the full sample size.
+
 ### First time on a new machine
 
 ```bash
