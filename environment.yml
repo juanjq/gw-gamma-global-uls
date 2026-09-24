@@ -16,6 +16,7 @@ dependencies:
   - uncertainties
   - jupyterlab
   - tqdm
+  - h5py
   - pip
   - pip:
       - gammapy

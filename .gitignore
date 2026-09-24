@@ -13,6 +13,9 @@ run_*.ipynb
 # Generated data / outputs (regenerable on either machine, never for git)
 data/tmp/
 data/slurm_output/
+# Full GWTC PE data releases (tens of MB to several GB each). Only the light,
+# per-alert data/gw_pe/standardized/<superevent>.h5 + index.csv are tracked.
+data/gw_pe/raw/
 outputs/
 *.pkl
 *.npz

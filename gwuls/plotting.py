@@ -987,3 +987,367 @@ def plot_grid_ts_distributions(lambda_bkg, ts2_masked, ts2_dist, mask_threshold_
     plt.show()
 
 
+
+
+# ---------------------------------------------------------------------------
+# GW viewing angle: p(d, theta_v) and the Step 4.3 options
+# (setup_angle_distribution.ipynb; gwuls.angle_distribution)
+# ---------------------------------------------------------------------------
+
+# One colour per entity, the same in every angle figure (validated categorical
+# order: slots 1-4 for the distribution kinds, 5-8 for waveform analyses).
+ANGLE_KIND_COLORS = {
+    "pe": "#2a78d6", "schutz": "#eb6834", "isotropic": "#1baf7a", "selection": "#eda100",
+    "two_bin": "#52514e", "fixed": "#52514e",
+}
+ANGLE_KIND_STYLES = {"two_bin": "--", "fixed": ":"}
+ANALYSIS_COLORS = ("#e87ba4", "#008300", "#4a3aa7", "#e34948")
+_BLUE_RAMP = ("#ffffff", "#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b")
+_TEXT, _TEXT_2, _GRID = "#0b0b0b", "#52514e", "#e4e3df"
+
+
+def _gray_cmap():
+    from matplotlib.colors import LinearSegmentedColormap
+    return LinearSegmentedColormap.from_list("gwuls_gray", ("#ffffff", "#f0efec", "#c3c2b7", "#8a8984"))
+
+
+def _blue_cmap():
+    from matplotlib.colors import LinearSegmentedColormap
+    return LinearSegmentedColormap.from_list("gwuls_blue", _BLUE_RAMP)
+
+
+def blue_steps(n):
+    """n ordered colours from the sequential blue ramp (light -> dark), for
+    ordinal families of curves (e.g. p(theta|d) at increasing d)."""
+    from matplotlib.colors import LinearSegmentedColormap
+    cmap = LinearSegmentedColormap.from_list("gwuls_blue_ord", _BLUE_RAMP[2:])
+    return [cmap(x) for x in np.linspace(0.0, 1.0, n)]
+
+
+def _style_axis(ax):
+    ax.grid(True, color=_GRID, lw=0.6)
+    ax.set_axisbelow(True)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_color(_TEXT_2)
+        ax.spines[side].set_linewidth(0.6)
+    ax.tick_params(colors=_TEXT_2, labelcolor=_TEXT)
+
+
+def _finish(fig, save_path):
+    if save_path is not None:
+        os.makedirs(os.path.dirname(str(save_path)) or ".", exist_ok=True)
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.show()
+
+
+def plot_distance_angle_corner(joints, colors=None, samples=None, levels=(0.5, 0.9),
+                               distance_lim=None, show_isotropic_prior=True, title=None,
+                               summary=True, save_path=None):
+    """Corner plot of p(d_L, theta_v) from one or more JointDistanceAngle.
+
+    joints : dict label -> JointDistanceAngle. The first one is drawn as a
+        filled density with its HPD contours; the others as contour lines, on
+        top, for comparison (e.g. per waveform analysis, or bandwidths).
+    samples : optional (d, theta) arrays drawn as faint dots under the first
+        joint and as step histograms in the marginals -- checks the KDE grid
+        against the samples it came from.
+    """
+    labels = list(joints)
+    colors = colors or {lab: c for lab, c in zip(labels, ("#2a78d6",) + ANALYSIS_COLORS)}
+    first = joints[labels[0]]
+
+    fig, axes = plt.subplots(2, 2, figsize=(8, 7.5),
+                             gridspec_kw={"width_ratios": [1, 1], "height_ratios": [1, 1],
+                                          "hspace": 0.06, "wspace": 0.06})
+    ax_d, ax_leg, ax_j, ax_t = axes[0, 0], axes[0, 1], axes[1, 0], axes[1, 1]
+    ax_leg.axis("off")
+
+    if distance_lim is None:
+        lo, hi = [], []
+        for J in joints.values():
+            d, pd = J.marginal_distance()
+            c = np.cumsum(pd) / pd.sum()
+            lo.append(np.interp(0.001, c, d)); hi.append(np.interp(0.999, c, d))
+        distance_lim = (min(lo), max(hi))
+
+    # joint panel: x = d, y = theta_v, so vertical slices are p(theta_v | d)
+    # neutral fill, so every entity's coloured contour stays readable on top of it
+    ax_j.pcolormesh(first.distance_Mpc, first.theta_deg, first.density.T, cmap=_gray_cmap(),
+                    shading="auto", rasterized=True)
+    if samples is not None:
+        ax_j.plot(samples[0], samples[1], ",", color=_TEXT_2, alpha=0.12, rasterized=True)
+    for lab in labels:
+        J = joints[lab]
+        lv = J.hpd_levels(levels)  # increasing density = decreasing fraction
+        ax_j.contour(J.distance_Mpc, J.theta_deg, J.density.T, levels=lv,
+                     colors=[colors[lab]], linewidths=[1.8, 1.0][:len(lv)] if lab == labels[0]
+                     else [1.3, 0.8][:len(lv)])
+    ax_j.set_xlim(distance_lim); ax_j.set_ylim(0, 90)
+    ax_j.set_yticks(np.arange(0, 91, 15))
+    ax_j.set_xlabel(r"$d_L$ [Mpc]"); ax_j.set_ylabel(r"$\theta_{\rm v}$ [deg]")
+
+    # marginals
+    for lab in labels:
+        J = joints[lab]
+        d, pd = J.marginal_distance()
+        t, pt = J.marginal_theta()
+        lw = 2.0 if lab == labels[0] else 1.3
+        ax_d.plot(d, pd, color=colors[lab], lw=lw, label=lab)
+        ax_t.plot(t, pt, color=colors[lab], lw=lw)
+    if samples is not None:
+        ax_d.hist(samples[0], bins=np.linspace(*distance_lim, 60), density=True, histtype="step",
+                  color=_TEXT_2, lw=0.8, label="samples (histogram)")
+        ax_t.hist(samples[1], bins=np.linspace(0, 90, 46), density=True, histtype="step",
+                  color=_TEXT_2, lw=0.8)
+    if show_isotropic_prior:
+        t = np.linspace(0, 90, 181)
+        ax_t.plot(t, np.sin(np.radians(t)) * np.pi / 180, color=_TEXT_2, lw=1.0, ls=":",
+                  label="isotropic prior")
+        ax_d.plot([], [], color=_TEXT_2, lw=1.0, ls=":", label=r"isotropic prior ($\theta_{\rm v}$)")
+    ax_d.set_xlim(distance_lim); ax_d.set_xticklabels([]); ax_d.set_yticks([])
+    ax_d.set_ylabel(r"$p(d_L)$")
+    ax_t.set_xlim(0, 90); ax_t.set_xticks(np.arange(0, 91, 15)); ax_t.set_yticks([])
+    ax_t.set_xlabel(r"$\theta_{\rm v}$ [deg]"); ax_t.set_ylabel(r"$p(\theta_{\rm v})$")
+    for ax in (ax_d, ax_j, ax_t):
+        _style_axis(ax)
+
+    handles, hl = ax_d.get_legend_handles_labels()
+    ax_leg.legend(handles, hl, loc="upper left", frameon=False, fontsize=9,
+                  title=f"contours: {', '.join(f'{int(100 * f)}%' for f in levels)} HPD",
+                  title_fontsize=9)
+    if summary:
+        t, pt = first.marginal_theta()
+        d, pd = first.marginal_distance()
+
+        def q(x, p):
+            c = np.concatenate([[0], np.cumsum(0.5 * (p[1:] + p[:-1]) * np.diff(x))])
+            return np.interp([0.05, 0.5, 0.95], c / c[-1], x)
+
+        tq, dq = q(t, pt), q(d, pd)
+        rho = first.meta.get("kernel_correlation")
+        txt = (f"{labels[0]}\n"
+               rf"$\theta_{{\rm v}}$ = {tq[1]:.1f} (+{tq[2]-tq[1]:.1f} / -{tq[1]-tq[0]:.1f}) deg" "\n"
+               rf"$d_L$ = {dq[1]:.0f} (+{dq[2]-dq[1]:.0f} / -{dq[1]-dq[0]:.0f}) Mpc" "\n"
+               "median, 90% interval")
+        if rho is not None:
+            txt += "\n" + rf"corr($d_L$, cos$\theta_{{\rm v}}$) = {rho:.2f}"
+        ax_leg.text(0.0, 0.0, txt, transform=ax_leg.transAxes, va="bottom", ha="left",
+                    fontsize=9, color=_TEXT)
+    if title:
+        fig.suptitle(title, y=0.93)
+    return _finish(fig, save_path)
+
+
+def plot_conditional_ridge(joint, quantiles=(0.05, 0.5, 0.95), samples=None,
+                           distance_lim=None, marks=None, title=None, save_path=None):
+    """p(d, theta_v) as a density image with the quantiles of p(theta_v | d)
+    along d on top -- the d-theta degeneracy in one picture. `marks`: optional
+    distances to draw as vertical lines (e.g. the ones sliced elsewhere)."""
+    d, pd = joint.marginal_distance()
+    c = np.cumsum(pd) / pd.sum()
+    if distance_lim is None:
+        distance_lim = (np.interp(0.001, c, d), np.interp(0.999, c, d))
+    fig, (ax, ax_m) = plt.subplots(2, 1, figsize=(8, 6), sharex=True,
+                                   gridspec_kw={"height_ratios": [3, 1], "hspace": 0.08})
+    ax.pcolormesh(d, joint.theta_deg, joint.density.T, cmap=_blue_cmap(), shading="auto",
+                  rasterized=True)
+    if samples is not None:
+        ax.plot(samples[0], samples[1], ",", color=_TEXT_2, alpha=0.12, rasterized=True)
+    dgrid = np.linspace(*distance_lim, 120)
+    qs = joint.conditional_theta_quantiles(quantiles, distance_Mpc=dgrid)
+    mid = len(quantiles) // 2
+    ax.plot(dgrid, qs[:, mid], color=_TEXT, lw=2.0,
+            label=rf"median of $p(\theta_{{\rm v}}\,|\,d_L)$")
+    ax.fill_between(dgrid, qs[:, 0], qs[:, -1], color=_TEXT, alpha=0.08, lw=0)
+    for k in (0, -1):
+        ax.plot(dgrid, qs[:, k], color=_TEXT, lw=1.0)
+    ax.plot([], [], color=_TEXT, lw=1.0,
+            label=f"{100 * quantiles[0]:.0f}-{100 * quantiles[-1]:.0f}% of "
+                  rf"$p(\theta_{{\rm v}}\,|\,d_L)$")
+    for m in ([] if marks is None else marks):
+        ax.axvline(m, color=_TEXT_2, lw=0.8, alpha=0.6)
+        ax_m.axvline(m, color=_TEXT_2, lw=0.8, alpha=0.6)
+        ax_m.annotate(f"{m:.0f}", (m, 1.0), xycoords=("data", "axes fraction"), xytext=(2, -2),
+                      textcoords="offset points", va="top", fontsize=8, color=_TEXT_2)
+    ax.set_ylim(0, 90); ax.set_yticks(np.arange(0, 91, 15)); ax.set_xlim(distance_lim)
+    ax.set_ylabel(r"$\theta_{\rm v}$ [deg]")
+    ax.legend(loc="upper right", frameon=False, fontsize=9)
+    ax_m.plot(d, pd, color=ANGLE_KIND_COLORS["pe"], lw=2.0)
+    ax_m.set_yticks([]); ax_m.set_ylabel(r"$p(d_L)$"); ax_m.set_xlabel(r"$d_L$ [Mpc]")
+    for a in (ax, ax_m):
+        _style_axis(a)
+    if title:
+        ax.set_title(title)
+    return _finish(fig, save_path)
+
+
+def _model_angle_lines(ax, model_angles, label=True):
+    for k, a in enumerate([] if model_angles is None else model_angles):
+        ax.axvline(a, color=_GRID, lw=2.5, zorder=0,
+                   label="model file angles" if (label and k == 0) else None)
+
+
+def plot_theta_distribution_comparison(dists, distance_Mpc=None, model_angles=None,
+                                       thresholds=(10, 20, 30, 45), title=None, save_path=None):
+    """The Step 4.3 options side by side, all normalised per degree so they
+    share one axis. dists : dict label -> ThetaDistribution (colour/style by
+    kind). Panels: pdf, CDF, pdf per unit cos(theta_v) (where isotropic is
+    flat), and P(theta_v < threshold) for a few jet-relevant thresholds."""
+    from matplotlib.lines import Line2D
+
+    fig, axs = plt.subplots(2, 2, figsize=(11, 7.5), gridspec_kw={"hspace": 0.32, "wspace": 0.22})
+    ax_p, ax_c, ax_cos, ax_b = axs.ravel()
+    grid = np.linspace(0, 90, 361)
+    handles, cos_max = [], 0.0
+    for lab, D in dists.items():
+        color = ANGLE_KIND_COLORS.get(D.kind, _TEXT_2)
+        ls = ANGLE_KIND_STYLES.get(D.kind, "-")
+        dd = distance_Mpc if D.depends_on_distance else None
+        if D.kind == "fixed":
+            ax_p.axvline(D.theta_fixed_deg, color=color, ls=ls, lw=1.8)
+        else:
+            _, p = D.pdf_grid(distance_Mpc=dd, theta_grid_deg=grid)
+            ax_p.plot(grid, p, color=color, ls=ls, lw=2.0)
+        if D.kind not in ANGLE_KIND_STYLES:  # dummies have no meaning per solid angle
+            # p(cos theta) = p(theta) / |d cos / d theta| = p(theta) / (sin(theta) pi/180)
+            s = np.sin(np.radians(grid)) * np.pi / 180
+            ok = grid > 0.5
+            pc = p[ok] / s[ok]
+            cos_max = max(cos_max, float(np.max(pc)))
+            ax_cos.plot(np.cos(np.radians(grid[ok])), pc, color=color, ls=ls, lw=2.0)
+        _, cdf = D.cdf_grid(distance_Mpc=dd, theta_grid_deg=grid)
+        ax_c.plot(grid, cdf, color=color, ls=ls, lw=2.0)
+        handles.append(Line2D([], [], color=color, ls=ls, lw=2.0, label=lab))
+
+    _model_angle_lines(ax_p, model_angles)
+    _model_angle_lines(ax_c, model_angles, label=False)
+    ax_p.set_xlim(0, 90); ax_p.set_xticks(np.arange(0, 91, 15)); ax_p.set_ylim(bottom=0)
+    ax_p.set_xlabel(r"$\theta_{\rm v}$ [deg]"); ax_p.set_ylabel(r"$p(\theta_{\rm v})$ [deg$^{-1}$]")
+    ax_p.set_title("pdf, per degree", fontsize=10)
+    ax_c.set_xlim(0, 90); ax_c.set_xticks(np.arange(0, 91, 15)); ax_c.set_ylim(0, 1)
+    ax_c.set_xlabel(r"$\theta_{\rm v}$ [deg]"); ax_c.set_ylabel(r"$P(<\theta_{\rm v})$")
+    ax_c.set_title("CDF", fontsize=10)
+    ax_cos.set_xlim(0, 1); ax_cos.set_ylim(0, 1.1 * cos_max if cos_max > 0 else None)
+    ax_cos.set_xlabel(r"$\cos\theta_{\rm v}$  (1 = face-on)")
+    ax_cos.set_ylabel(r"$p(\cos\theta_{\rm v})$")
+    ax_cos.set_title("pdf per unit solid angle: isotropic is flat", fontsize=10)
+
+    labs = [lab for lab in dists if dists[lab].kind != "fixed"]  # a fixed angle is a step: 0 or 1
+    width = 0.8 / len(labs)
+    x = np.arange(len(thresholds))
+    for k, lab in enumerate(labs):
+        D = dists[lab]
+        dd = distance_Mpc if D.depends_on_distance else None
+        vals = [D.prob_below(t, distance_Mpc=dd) for t in thresholds]
+        ax_b.bar(x + (k - (len(labs) - 1) / 2) * width, vals, width * 0.9,
+                 color=ANGLE_KIND_COLORS.get(D.kind, _TEXT_2),
+                 hatch="//" if D.kind in ANGLE_KIND_STYLES else None, edgecolor="white", lw=0)
+    ax_b.set_xticks(x, [rf"$\theta_{{\rm v}}<{t}^\circ$" for t in thresholds])
+    ax_b.set_ylim(0, 1); ax_b.set_ylabel("probability")
+    ax_b.set_title("chance of a near-on-axis view", fontsize=10)
+    for a in axs.ravel():
+        _style_axis(a)
+    ax_b.grid(False, axis="x")
+    if model_angles is not None and len(model_angles):
+        handles.append(Line2D([], [], color=_GRID, lw=2.5, label="model file angles"))
+    fig.legend(handles=handles, loc="upper center", ncol=min(len(handles), 4), frameon=False,
+               bbox_to_anchor=(0.5, 1.0 if not title else 0.97))
+    if title:
+        fig.suptitle(title, y=1.02)
+    return _finish(fig, save_path)
+
+
+def plot_theta_sampler_check(dists, n=200_000, distance_Mpc=None, seed=0, save_path=None):
+    """Small multiples: a histogram of `n` draws from each ThetaDistribution
+    against its own tabulated pdf, with the largest CDF difference (KS
+    distance) in each title -- checks that `.sample` draws what `.pdf_grid`
+    says."""
+    rng = np.random.default_rng(seed)
+    n_panels = len(dists)
+    ncol = min(3, n_panels)
+    nrow = int(np.ceil(n_panels / ncol))
+    fig, axs = plt.subplots(nrow, ncol, figsize=(4 * ncol, 2.8 * nrow), squeeze=False,
+                            gridspec_kw={"hspace": 0.55, "wspace": 0.25})
+    bins = np.linspace(0, 90, 91)
+    for ax, (lab, D) in zip(axs.ravel(), dists.items()):
+        dd = distance_Mpc if D.depends_on_distance else None
+        draws = D.sample(n, distance_Mpc=dd, rng=rng)
+        color = ANGLE_KIND_COLORS.get(D.kind, _TEXT_2)
+        ax.hist(draws, bins=bins, density=True, color=color, alpha=0.35, lw=0)
+        grid, pdf = D.pdf_grid(distance_Mpc=dd, theta_grid_deg=np.linspace(0, 90, 721))
+        g, cdf = D.cdf_grid(distance_Mpc=dd, theta_grid_deg=np.linspace(0, 90, 721))
+        emp = np.searchsorted(np.sort(draws), g, side="right") / draws.size
+        ks = np.max(np.abs(emp - cdf))
+        if D.kind == "fixed":
+            ax.axvline(D.theta_fixed_deg, color=_TEXT, lw=1.2)
+        else:
+            ax.plot(grid, pdf, color=_TEXT, lw=1.2)
+        ax.set_title(f"{lab}\nKS distance = {ks:.4f}  (1/sqrt(n) = {1 / np.sqrt(n):.4f})",
+                     fontsize=9)
+        ax.set_xlim(0, 90); ax.set_xticks(np.arange(0, 91, 15)); ax.set_yticks([])
+        ax.set_xlabel(r"$\theta_{\rm v}$ [deg]")
+        _style_axis(ax)
+    for ax in axs.ravel()[n_panels:]:
+        ax.axis("off")
+    return _finish(fig, save_path)
+
+
+def model_angle_weights(dist, model_angles, method="nearest", distance_Mpc=None):
+    """Probability that sim_3d ends up using each model file, for a
+    ThetaDistribution and GRBModelSet.get_model's `method`:
+
+    - "nearest"    (Option A): the mass of p(theta_v) closest to each angle;
+    - "stochastic" (Option B): each theta_v is split between its two
+      bracketing angles linearly, so the weights are p(theta_v) integrated
+      against hat functions. Outside the tabulated range, everything goes to
+      the edge file (as get_model clips).
+    """
+    angles = np.sort(np.asarray(model_angles, dtype=float))
+    dd = distance_Mpc if dist.depends_on_distance else None
+    if dist.kind == "fixed":
+        theta = np.array([dist.theta_fixed_deg]); w = np.array([1.0])
+    else:
+        theta = np.linspace(0, 90, 3601)
+        _, p = dist.pdf_grid(distance_Mpc=dd, theta_grid_deg=theta)
+        w = p * np.gradient(theta)
+        w = w / w.sum()
+    if method == "nearest":
+        k = np.argmin(np.abs(theta[:, None] - angles[None, :]), axis=1)
+        return np.bincount(k, weights=w, minlength=angles.size)
+    if method == "stochastic":
+        out = np.zeros(angles.size)
+        for k in range(angles.size):
+            e = np.zeros(angles.size); e[k] = 1.0
+            out[k] = np.sum(w * np.interp(theta, angles, e))  # np.interp clamps at the edges
+        return out
+    raise ValueError("method must be 'nearest' or 'stochastic'")
+
+
+def plot_model_angle_assignment(dists, model_angles, method="nearest", distance_Mpc=None,
+                                save_path=None):
+    """Grouped bars: for each model file (angle), the fraction of iterations
+    that would use it under each Step 4.3 option. This is where the choice of
+    angle distribution actually reaches the upper limit."""
+    angles = np.sort(np.asarray(model_angles, dtype=float))
+    labs = list(dists)
+    width = 0.8 / len(labs)
+    x = np.arange(angles.size)
+    fig, ax = plt.subplots(figsize=(9, 3.8))
+    for k, lab in enumerate(labs):
+        D = dists[lab]
+        w = model_angle_weights(D, angles, method=method, distance_Mpc=distance_Mpc)
+        ax.bar(x + (k - (len(labs) - 1) / 2) * width, w, width * 0.9,
+               color=ANGLE_KIND_COLORS.get(D.kind, _TEXT_2),
+               hatch="//" if D.kind in ANGLE_KIND_STYLES else None, edgecolor="white", lw=0,
+               label=lab)
+    ax.set_xticks(x, [rf"{a:.1f}$^\circ$" for a in angles])
+    ax.set_xlabel("model file used (its viewing angle)")
+    ax.set_ylabel("fraction of iterations")
+    ax.set_ylim(0, 1)
+    ax.set_title(f"Which model file each option sends the draws to ({method})", fontsize=10)
+    ax.legend(frameon=False, fontsize=8, loc="upper left", bbox_to_anchor=(1.01, 1.0))
+    _style_axis(ax)
+    ax.grid(False, axis="x")
+    return _finish(fig, save_path)
