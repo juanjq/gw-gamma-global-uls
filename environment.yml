@@ -1,0 +1,22 @@
+name: gw-gamma-global-uls
+channels:
+  - conda-forge
+dependencies:
+  # ligo.skymap ships a compiled core extension. Keep this environment on the
+  # Python/conda-forge combination used by the working GW-Ul setup instead of
+  # resolving an arbitrary Python 3.13 binary stack.
+  - python=3.11
+  - numpy
+  - scipy
+  - matplotlib
+  - astropy
+  - healpy
+  - ligo.skymap
+  - regions
+  - uncertainties
+  - jupyterlab
+  - tqdm
+  - h5py
+  - pip
+  - pip:
+      - gammapy
