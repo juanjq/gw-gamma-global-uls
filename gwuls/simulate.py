@@ -1286,7 +1286,8 @@ def sample_sky_and_distance(prob_gw, cdf_valid, cdf_table, r_grid,
 # L(E', t'; theta) (gwuls.grb_model.GRBModelSet, e.g. the fixed phenomenological
 # benchmark of setup_model_phenomenological_fixed.ipynb):
 #
-#   * theta_i ~ p(theta | d_i) from the alert's viewing-angle distribution,
+#   * theta_i ~ p(theta | d_i) from the alert's viewing-angle distribution, or a
+#     fixed angle, or an isotropic / Schutz prior (`resolve_theta_distribution`),
 #   * the model at theta_i, projected to (d_i, z_i) with EBL (Step 7),
 #   * averaged over each run's own GTIs, in time since the merger, and injected
 #     through that run's own exposure, PSF and energy dispersion, then summed
@@ -1309,8 +1310,14 @@ class EmissionModelInjection:
 
     model_dir : directory of a `grb_model.GRBModelSet` cache (one .npz per angle),
         e.g. paths.GRB_MODEL_PHENOMENOLOGICAL_DIR / "benchmark".
-    theta_distribution : path of an `angle_distribution.ThetaDistribution` cache
-        (setup_angle_distribution.ipynb); theta_i ~ p(theta | d_i) per realisation.
+    theta_distribution : where theta_i comes from, per realisation (see
+        `resolve_theta_distribution`):
+        a path of an `angle_distribution.ThetaDistribution` cache
+            (setup_angle_distribution.ipynb), e.g. the alert's own, so that
+            theta_i ~ p(theta | d_i);
+        "fixed:<deg>" -- every realisation at that angle;
+        "isotropic"   -- p(theta) = sin(theta), random orientation, no GW information;
+        "schutz"      -- orientations of GW-detected sources (Schutz 2011).
     normalisation : what the trial luminosity L_k is.
         "gti_mean" (guidelines Step 6): the isotropic-equivalent luminosity in the
             rest-frame band `band_rest_TeV`, averaged over the observation's GTIs,
@@ -1349,6 +1356,7 @@ class EmissionModelInjection:
         if self.theta_method not in ("interp", "nearest"):
             raise ValueError(f"theta_method must be 'interp' or 'nearest', "
                              f"got {self.theta_method!r}")
+        _parse_theta_spec(self.theta_distribution)   # a malformed "fixed:..." fails here
 
     def describe(self, analysis_band) -> str:
         if self.normalisation == "anchor":
@@ -1358,6 +1366,36 @@ class EmissionModelInjection:
         lo, hi = self.band_rest_TeV or [float(_as_energy(e).to_value(u.TeV)) for e in _band(analysis_band)]
         return (f"L_k = the mean isotropic-equivalent luminosity over the GTIs, "
                 f"rest-frame {lo:g}-{hi:g} TeV")
+
+
+def _parse_theta_spec(spec):
+    """(mode, kwargs) of `angle_distribution.make_theta_distribution` for the
+    built-in theta specs "isotropic", "schutz" and "fixed:<deg>"; None for
+    anything else, which is then read as the path of a saved cache."""
+    s = str(spec).strip().lower()
+    if s in ("isotropic", "schutz"):
+        return s, {}
+    if s.startswith("fixed:"):
+        try:
+            theta = float(s.split(":", 1)[1])
+        except ValueError:
+            raise ValueError(f"theta spec {spec!r}: expected 'fixed:<deg>', e.g. 'fixed:20'") from None
+        if not 0.0 <= theta <= 90.0:
+            raise ValueError(f"theta spec {spec!r}: the viewing angle must be in [0, 90] deg")
+        return "fixed", {"theta_deg": theta}
+    return None
+
+
+def resolve_theta_distribution(spec):
+    """The `angle_distribution.ThetaDistribution` an `EmissionModelInjection`
+    draws theta from: built for "isotropic", "schutz" or "fixed:<deg>", loaded
+    from disk for a path (e.g. paths.theta_distribution_path(source_name))."""
+    from .angle_distribution import load_theta_distribution, make_theta_distribution
+
+    parsed = _parse_theta_spec(spec)
+    if parsed is None:
+        return load_theta_distribution(spec)
+    return make_theta_distribution(parsed[0], **parsed[1])
 
 
 def gti_seconds_since(gti, t0):
@@ -1498,8 +1536,8 @@ def perform_n_simulations_3d(
     PWL amplitude, inject, and record Lambda.
 
     emission_model : None (default: the power law above), or an
-        `EmissionModelInjection`. Then each realisation also draws theta_i ~ p(theta |
-        d_i) and injects the emission model instead, run by run (Section 5b), with
+        `EmissionModelInjection`. Then each realisation also draws theta_i (from
+        `emission_model.theta_distribution`: p(theta | d_i), fixed or a prior) and injects the emission model instead, run by run (Section 5b), with
         L0 read as `emission_model.normalisation` says. The (sky, distance) draws are
         the same as without it, for the same `sampling_seed`; theta uses its own
         stream. `spectral_index`, `luminosity_band` and `apply_k_correction` are then
@@ -1637,11 +1675,10 @@ def _perform_3d_model(data, engine, draw, n_sim, luminosity, file_input, file_ou
                       store_stats, n_jobs, verbose, config):
     """The emission-model branch of `perform_n_simulations_3d`, from the (sky,
     distance) draws on: theta, the per-run spectra, the realisations, the output."""
-    from .angle_distribution import load_theta_distribution
     from .grb_model import GRBModelSet
 
     model_set = GRBModelSet.load(config.model_dir)
-    theta_dist = load_theta_distribution(config.theta_distribution)
+    theta_dist = resolve_theta_distribution(config.theta_distribution)
     d_sim = draw["d_sim"]
     z_sim = np.atleast_1d(redshift_from_luminosity_distance(d_sim * u.Mpc))
     # theta has its own stream, so the (sky, distance) draws stay those of the

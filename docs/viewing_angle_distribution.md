@@ -447,6 +447,94 @@ replaces Steps 4.1–4.3. Use $p(\theta \mid d_i)$ with skymap distances only wh
 distance posteriors agree. The notebook prints this recommendation whenever the shift
 exceeds 2°.
 
+### 8.1 The second shortcut: one $p(\theta \mid d)$ for the whole sky
+
+The full posterior is four-dimensional, $p(\Omega, d, \theta)$ with $\Omega$ the sky
+position. By the chain rule,
+
+$$
+p(\Omega, d, \theta) = p(\Omega)\;p(d \mid \Omega)\;p(\theta \mid d, \Omega).
+$$
+
+Drawing a pixel, then $d$ in that pixel, then $\theta$ from the slice at that $d$ is
+therefore **exact**. It is a draw from each pixel's own 2D $p(d, \theta \mid \Omega)$,
+and no 2D draw is needed. The condition is that the slice is the **per-pixel**
+conditional $p(\theta \mid d, \Omega)$. The grid of Section 6 is the sky-marginalised
+$p(\theta \mid d) = \int p(\theta \mid d, \Omega)\,p(\Omega \mid d)\,d\Omega$. Using it in
+every pixel assumes that $\theta$ is independent of $\Omega$ once $d$ is fixed.
+
+Physically this is not exact. The detected amplitude is $\propto \Theta(\iota; F_+, F_\times)/d$
+(Section 3), and the antenna patterns $F_{+,\times}$ change across the sky. Where the
+network sees mainly one polarisation, $\Theta$ depends weakly on $\iota$ and the angle is
+poorly constrained. Where it sees both, the ratio $h_\times/h_+ \propto 2\cos\iota/(1+\cos^2\iota)$
+is measured and so is the angle. The $d$–$\theta$ relation is therefore sky-dependent.
+This is the same coupling that the Schutz (2011) formula averages away (Section 9.2).
+
+The PE samples answer the question directly, because each sample carries its own
+(RA, Dec, $d$, $\theta_{JN}$). `sample_joint` draws whole samples and is exact. The check
+(`angle_distribution.sky_dependence_check`, in the notebook after the skymap check)
+measures what the shortcut costs:
+
+1. The samples are split into $K$ contiguous sky regions (`sky_regions`: k-means on the
+   unit sphere, best of 20 starts, no region below 5% of the samples).
+2. In each region $r$, the **exact** answer is the region's own samples, which are draws of
+   $p(\theta \mid d, \Omega \in r)$. The **shortcut** is all samples, each weighted by the
+   fraction of its distance bin (40 equal-count bins) that lies in $r$. That is the
+   sky-marginalised $p(\theta \mid d)$ evaluated at the region's own distances. It is
+   grid-free, so the KDE smoothing does not enter.
+3. **Null distribution:** region labels are permuted within each distance bin (300 times).
+   This keeps each region's distances and breaks any sky–angle link at fixed $d$. It gives
+   the noise level of every shift.
+4. **Formal test (PIT):** $u_k = F(\theta_k \mid d_k)$ from the pooled grid is uniform in
+   every region if there is no sky dependence. The statistic is $\sqrt{n}\times$ the KS
+   distance from uniform, with permutation p-values. Any KDE bias in $u$ is shared by
+   the observed and permuted regions, so it cannot fake a signal.
+
+Random region labels give null results ($|$shift$|$ < 1.1 null sd, p = 0.12–0.96), and the
+shifts do not move when the number of distance bins changes from 20 to 160.
+
+![Sky dependence of p(θ | d) for S240615dg](figures/viewing_angle/theta_v_sky_dependence.png)
+
+**S240615dg** (localised to a few deg²), 3 regions:
+
+| region | $n$ | $d_L$ median | $\theta_\mathrm{v}$ median: exact / shortcut (shift ± null sd) | $P(\theta_\mathrm{v} < 20^\circ)$: exact / shortcut | PIT p |
+| --- | --- | --- | --- | --- | --- |
+| 0 | 7018 | 1573 | 24.5 / 24.1 (+0.5 ± 0.1) | 0.369 / 0.383 | 0.91 |
+| 1 | 6703 | 1570 | 24.3 / 24.2 (+0.1 ± 0.1) | 0.373 / 0.378 | 0.57 |
+| 2 | 6279 | 1555 | 24.5 / 25.0 (−0.6 ± 0.1) | 0.377 / 0.357 | 0.003 |
+
+The dependence is statistically detectable (20 000 samples resolve fractions of a degree)
+but practically irrelevant: at most 0.6° and 0.02 in $P(\theta_\mathrm{v} < 20^\circ)$. Over a
+few square degrees the antenna patterns barely change.
+
+![Sky dependence of p(θ | d) for S241125n](figures/viewing_angle/S241125n_theta_v_sky_dependence.png)
+
+**S241125n** (a broad, two-arc localisation over thousands of deg²):
+
+| regions | $\theta_\mathrm{v}$ median shift (exact − shortcut) per region, null sd 0.2–0.3° | $P(\theta_\mathrm{v} < 20^\circ)$, exact / shortcut, in the most-shifted regions |
+| --- | --- | --- |
+| 3 | −0.7, −1.1, **+3.2** | 0.077 / 0.089 |
+| 4 | −1.1, +3.2, **−6.5**, **+6.2** | 0.082 / 0.057 and 0.073 / 0.100 |
+
+In panel (b), the median $\theta(d)$ of the arc near (RA −50°, Dec +20°) runs 2–4° above the
+all-sky curve at almost every distance. The finer the sky regions, the larger the shifts
+(±6.5° with 4 regions), as expected if it is the per-pixel conditional that differs. In the
+on-axis probability the shortcut is off by −30% in one region (0.057 instead of 0.082) and
++37% in another (0.100 instead of 0.073).
+
+**Consequences for `sim_3d`.** Over the whole sky the shortcut averages out: drawing
+$\Omega$ and $d$ from the same posterior and $\theta$ from $p(\theta \mid d)$ reproduces the
+$\theta$ marginal (route 2 of Section 7.4). It is biased **region by region**. That
+matters because the IACT only covers part of the localisation. What enters the limit is
+$\theta$ in the observed pixels, and for a broad localisation that can be off by several
+degrees. With PE, `sample_joint` removes the issue. To see the size of the effect for a
+specific observation, pass `regions` = inside/outside the pointings to
+`sky_dependence_check`. Without PE no per-pixel information on $\theta$ exists (the public
+skymap carries none). A sky-dependent selection model, with
+$P_\mathrm{det}$ evaluated with the network's $F_{+,\times}$ at each pixel at the event
+time instead of averaged over the sky, would be the strict population-level analogue.
+It is not implemented.
+
 ---
 
 ## 9. Without PE: population and placeholder options
@@ -497,9 +585,63 @@ $$
 
 ![Selection model vs Schutz, and p(θ|d) at fixed d/D_h](figures/viewing_angle/selection_vs_schutz.png)
 
+(Schutz 2011, Eq. 28, writes this as $p_\mathrm{det}(\iota) = 0.076\,(1 + 6\cos^2\iota + \cos^4\iota)^{3/2}\sin\iota$
+on $[0, \pi]$, which is the same function: $(1+\cos^2)^2/4 + \cos^2 = (1 + 6\cos^2 + \cos^4)/4$.)
+
 **Check:** the Monte Carlo $d$-marginal of the selection model and the Schutz closed form
 have medians 36.5° and 36.2°, the same peak (31.0°), and a maximum CDF difference of 0.009.
 Schutz is an excellent approximation of the selection marginal.
+
+#### How Schutz derives it, and what it assumes
+
+Schutz (2011, Sections 2.1–2.5) averages the matched-filter power SNR over the
+polarisation angle $\psi$. For each detector $\langle F_+^2\rangle_\psi = \langle F_\times^2\rangle_\psi = P(\Omega)/2$,
+so the averaged SNR **separates** into a sky factor and an inclination factor:
+
+$$
+\langle\rho^2\rangle_\psi \;\propto\; \frac{P_N(\Omega)}{d^2}\;F_\mathrm{rad}(\iota),
+\qquad
+F_\mathrm{rad}(\iota) = \tfrac18\left(1 + 6\cos^2\iota + \cos^4\iota\right),
+$$
+
+where $P_N = \sum_k (F_{+,k}^2 + F_{\times,k}^2)$ is the network antenna power pattern.
+He then treats $\sqrt{\langle\rho^2\rangle}$ as the actual SNR. The reach in direction
+$\Omega$ for inclination $\iota$ becomes $R \propto [P_N(\Omega)\,F_\mathrm{rad}(\iota)]^{1/2}$,
+a detection volume with a **sharp edge**. Integrating $d^2\,dd$ up to it gives
+$V(\iota) \propto F_\mathrm{rad}(\iota)^{3/2}$, and weighting by the isotropic $\sin\iota$
+gives the formula. Because the sky factor has separated out, the result is the same for
+any network and any sky position. Schutz calls it "universal". Each step is an approximation:
+
+| # | approximation | what the exact treatment has | effect on $p(\theta)$ |
+| --- | --- | --- | --- |
+| 1 | **Polarisation/sky average inside the threshold.** $\rho^2$ is replaced by its $\psi$-average before thresholding, i.e. $\langle\Theta^3\rangle \to \langle\Theta^2\rangle^{3/2}$. Schutz (2011, §2.1): sources at the edge of this volume are detected only 50% of the time, and some outside it are detected. | Detection on the actual $\Theta(\iota, F_+, F_\times)$, as in the `"selection"` model. | Small: max CDF difference 0.009, medians 36.2° vs 36.5° (check above). |
+| 2 | **Inclination separable from sky position.** Follows from step 1: at fixed $\psi$-averaged power, every sky position has the same $\iota$-dependence. | The $F_+/F_\times$ mix varies over the sky, so $p(\theta \mid d, \Omega)$ varies (Section 8.1). | None on the all-sky marginal (that is what is averaged). It is lost per pixel: up to ±6° for a broad PE localisation (Section 8.1). |
+| 3 | **Marginal over all distances.** Integrating to the edge of the volume removes $d$. | $p(\theta \mid d)$ tilts to face-on as $d \to D_h$ (median 58° at $d/D_h = 0.1$, 14° at 0.9). | Large once $d_i$ is drawn. Schutz cannot use the distance of the iteration; the `"selection"` kind can. |
+| 4 | **Uniform in Euclidean volume, one intrinsic amplitude.** Sources $\propto d^2\,dd$, no cosmology, every source with the same chirp mass (so one horizon). | Comoving volume and $(1+z)$ time dilation make the rate grow slower than $d^2$ at large $d_L$; a mass spread mixes horizons. | The Euclidean marginal is independent of $D_h$, so a mass spread changes nothing. A sub-Euclidean distance distribution $\propto d^p$ gives $\sin\theta\,\langle\Theta^{p+1}\rangle$, a **weaker** face-on bias: median 36.5° / 39.1° / 42.2° and $P(<20^\circ)$ = 0.19 / 0.17 / 0.14 for $p$ = 2 / 1.5 / 1 (`selection_joint(distance_power=p)`). This matters for distant BBH, less for BNS at O4/O5 ranges. |
+| 5 | **Sharp threshold on the expected SNR.** No noise fluctuation of the observed SNR, no FAR-based selection. | Detection on the noisy observed SNR or the pipeline significance. | Smooths the edge of the volume; second order for the shape. |
+| 6 | **Leading-order quadrupole, non-precessing.** $F_\mathrm{rad}(\iota)$ is the $(2,\pm2)$ radiation pattern, with $\iota$ the orbital inclination. | Higher harmonics (unequal masses) and precession change the inclination pattern, and the jet follows $\theta_{JN}$, not $\iota$. | Small for near-equal-mass BNS. Grows with mass ratio and spin. |
+| 7 | **Isotropic intrinsic orientations, GW selection only.** | Any further selection (EM-triggered searches, early warning, alert significance cuts) changes the population. | Schutz's 3.4× enhancement of on-axis events (slope at $\iota = 0$: 1.72 vs 0.5; here $P(<10^\circ)$ = 0.051 vs 0.015) assumes GW selection alone. |
+
+#### Schutz is a population prior, not an event posterior
+
+Schutz describes the **ensemble** of detected binaries. It is the right $p(\theta)$ for an
+alert only when nothing about that alert's inclination is known. Two consequences follow.
+
+- It must **not** be combined with a PE posterior. A single-event posterior with the
+  isotropic `Sine` prior already describes the detected source: the selection depends only
+  on the data, so it does not enter one event's posterior. Multiplying by Schutz would
+  count the face-on bias twice.
+- Combined with a skymap distance it ignores the distance–inclination degeneracy (item 3).
+  The skymap's $p(d \mid \Omega)$ was itself obtained by marginalising over an isotropic
+  inclination. Within the skymap, a near $d$ goes with an inclined source and a far $d$ with
+  a face-on one, but Schutz draws the same $\theta$ distribution for both. The `"selection"`
+  kind restores the population-level $p(\theta \mid d)$, at the price of a horizon $D_h$.
+  Neither can restore the event-specific relation, which only the PE samples have.
+
+Nissanke et al. (2010, Section 3.2 and their Fig. 3) obtain the same face-on bias from a
+full Monte Carlo of a five-detector network: binaries uniform in comoving volume to
+$z = 1$, random sky positions and orientations, and a threshold of 7.5 on the network SNR.
+Schutz (2011, §2.5) shows that his closed form agrees with that Monte Carlo.
 
 What Schutz throws away is the distance dependence (right panel). Nearby sources can be at
 any angle; sources near the horizon are detected only if nearly face-on:
@@ -624,6 +766,9 @@ run the notebook. Part 0 standardizes the file and updates `index.csv`. Commit
   outside the support are clamped and counted.
 - **Skymap vs PE distance.** Mixing the two biases the angle (Section 8). Prefer
   `sample_joint` for alerts with PE.
+- **One $p(\theta \mid d)$ for the whole sky.** The saved grid is sky-marginalised. Its
+  per-region bias is negligible for a well-localised event (≤ 0.6° for S240615dg) but
+  reaches ±6° for a broad one (S241125n) (Section 8.1). `sample_joint` avoids it.
 - **Selection model.** It uses a single-detector antenna pattern averaged over sky and
   polarisation, and a sharp SNR threshold. It needs a horizon $D_h$ appropriate to the source
   type and network. 3000 Mpc is illustrative. Its marginal agrees with Schutz to within 0.009
@@ -641,7 +786,13 @@ run the notebook. Part 0 standardizes the file and updates `index.csv`. Commit
 - L. S. Finn and D. F. Chernoff, *Observing binary inspiral in gravitational radiation: one
   interferometer*, Phys. Rev. D **47**, 2198 (1993): the orientation factor $\Theta$.
 - B. F. Schutz, *Networks of gravitational wave detectors and three figures of merit*, Class.
-  Quantum Grav. **28**, 125023 (2011): the detected-source inclination distribution.
+  Quantum Grav. **28**, 125023 (2011), [arXiv:1102.5421](https://arxiv.org/abs/1102.5421):
+  the detected-source inclination distribution (Eq. 28) and its derivation from the
+  polarisation-averaged network antenna pattern (Sections 2.1–2.5).
+- S. Nissanke, D. E. Holz, S. A. Hughes, N. Dalal and J. L. Sievers, *Exploring short
+  gamma-ray bursts as gravitational-wave standard sirens*, ApJ **725**, 496 (2010),
+  [arXiv:0904.1017](https://arxiv.org/abs/0904.1017): Monte Carlo of the detected
+  $(d_L, \cos\iota)$ distribution (their Fig. 3), the distance–inclination degeneracy.
 - L. P. Singer et al., *Going the distance: mapping host galaxies of LIGO and Virgo sources
   in three dimensions using local cosmography and targeted follow-up*, ApJL **829**, L15
   (2016): the per-pixel distance ansatz of the skymaps.

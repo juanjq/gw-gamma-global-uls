@@ -1056,12 +1056,49 @@ S240615dg the saved kind is `pe`.
 
 The 3D limit can now inject the emission model instead of the Γ = 2 power law
 (`simulate.EmissionModelInjection`, notebook section "3D luminosity upper limit with the emission
-model"). Per realisation: $(b, d)$ from the skymap as before (same draws for the same seed), then
-$\theta_i \sim p(\theta_v \mid d_i)$, the model at $\theta_i$, and for each run $j$ the observer-frame
+model"). The model is the fixed phenomenological benchmark jet of
+`setup_model_phenomenological_fixed.ipynb` (`data/models/grb_afterglow_phenomenological/benchmark/`,
+1° grid in $\theta_v$, read with `get_model(θ, "interp", align_peaks=False)`). Per realisation:
+$(b, d)$ from the skymap as before (same draws for the same seed), then a viewing angle $\theta_i$
+(by default $\theta_i \sim p(\theta_v \mid d_i)$; see Step 4.3 below), the model at $\theta_i$, and for each run $j$ the observer-frame
 spectrum averaged over that run's GTIs (time since the merger), with EBL at $z_i$. It is folded through
 run $j$'s own exposure, PSF and energy dispersion, and the runs are summed into the stacked dataset
 the TS engine analyses. How the guidelines' steps map onto it:
 
+- **Step 4.3, the viewing angle (`THETA_MODE` in the notebook).** `EmissionModelInjection.theta_distribution`
+  takes a saved `ThetaDistribution` cache or one of the built-in specs, all resolved by
+  `simulate.resolve_theta_distribution`. The angle uses its own random stream, so the sky and
+  distance draws do not change with the choice:
+
+  | `THETA_MODE` | spec passed | $\theta_i$ | depends on $d_i$? | what the limit means |
+  | --- | --- | --- | --- | --- |
+  | `"gw"` (default) | `data/gw_input/<alert>_theta_distribution.npz` | $p(\theta_v\mid d_i)$ of the alert (PE, §10) | yes | the limit for this event, marginalised over its measured inclination |
+  | `"fixed"` | `"fixed:<deg>"` (`THETA_FIXED_DEG`) | that angle | no | the benchmark jet seen at that angle |
+  | `"isotropic"` | `"isotropic"` | $\sin\theta_v$, i.e. uniform in $\cos\theta_v$ | no | random orientation, no GW information |
+  | `"schutz"` | `"schutz"` | Schutz (2011), §10.6 | no | a typical GW-*detected* source, no event information |
+
+  **Which one is the standard case.** For an event-specific limit, `"gw"`. The GW data measure the
+  inclination together with the distance, so $p(\theta_v\mid d)$ is the posterior, and conditioning
+  on the same $d_i$ keeps the distance–inclination correlation (§10.3). `"isotropic"` is the prior
+  before the detection. It ignores that measurement and the selection of GW detectors toward face-on
+  systems (median 60°, against 24.7° for the S240615dg PE and 36° for Schutz, §10.6), and pairs a
+  GW-informed distance with a GW-blind angle. It is a conservative bracket, not the standard case.
+  "Homogeneous" means uniform on the sphere (in $\cos\theta_v$), not uniform in $\theta_v$.
+  `"fixed"` is the companion presentation: a limit that does not depend on the GW inclination,
+  quoted at a few angles (e.g. 0°, $\theta_\mathrm{core}$ = 14°, 30°, 45°) as a curve against
+  $\theta_v$. `"schutz"` is the population fallback for alerts without PE.
+
+  How much the choice matters depends on the normalisation. With `"gti_mean"` the angle reaches the
+  limit only through the light-curve shape across the runs: for three synthetic 20-min runs at
+  2–4 h (no EBL), the median injected 1 TeV flux per unit $L_k$ changes by a factor of about 3.5
+  between 0° and 45°.
+  With `"anchor"`, it changes by about six orders of magnitude between the same two angles. The
+  isotropic and `"gw"` medians then differ by seven orders of magnitude, so the choice must be quoted
+  with the limit.
+
+  Every cache name of the model limit carries the choice (`_thetafixed20`, `_thetaisotropic`, …;
+  none for `"gw"`, whose names are unchanged), and the JSON export records `theta_mode_3d_model`
+  and `theta_spec_3d_model`.
 - **Step 3, rest-frame band.** `band_rest_TeV`, by default the analysis band taken in the rest frame.
   The phenomenological spectra are exact power laws, so evaluating them outside the tabulated
   1 GeV–10 TeV is exact. For the catO5 files it would be an extrapolation.
@@ -1093,7 +1130,11 @@ Still open:
 - **Not yet run on the real data.** Validated only on a synthetic three-run observation.
 - **Joint PE draw.** $(\mathrm{RA},\mathrm{Dec},d,\theta)$ drawn together from PE (§10.7) is not
   implemented; $\theta$ is drawn conditional on the skymap distance, which for S240615dg sits below the
-  PE distance and so moves the $\theta_v$ median 8.2° off-axis (§10.7).
+  PE distance and so moves the $\theta_v$ median 8.2° off-axis (§10.7). This affects only
+  `THETA_MODE = "gw"`; the other modes do not depend on $d$.
+- **The jet is fixed.** The one-sigma variants and the population bank of
+  `setup_model_phenomenological_fixed.ipynb` §5 can be used by pointing `model_dir_3d` at their caches,
+  but no loop over them, and no per-realisation bank member, is wired into the notebook.
 - **EBL tables.** `apply_ebl=True` needs `$GAMMAPY_DATA/ebl/`.
 
 ---
@@ -1119,6 +1160,7 @@ Still open:
 | Three sampling routes reproduce the posterior (quantiles, correlation, KS) | Part 1 | sampler bugs | KS ≤ 0.016 |
 | Each option's sampler vs its own pdf | Part 2 | sampler bugs | at $1/\sqrt n$ level |
 | Schutz vs Monte-Carlo selection model | Part 2 | a wrong closed form | max CDF difference 0.009 |
+| `resolve_theta_distribution` for every `THETA_MODE`; malformed `"fixed:…"` rejected at construction | §11, Step 4.3 | a silently wrong angle draw | medians: fixed 20°, isotropic 60.2°, Schutz 36.4°, S240615dg PE given $d$ = 1400 Mpc 33.9° |
 
 ---
 

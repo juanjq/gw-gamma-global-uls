@@ -637,34 +637,33 @@ def plot_ul_convergence(hist_x, hist_frac, hist_err, x_ul, cl, x_ul_lo_1sigma=No
     hist_err  = np.zeros_like(hist_frac) if hist_err is None else np.asarray(hist_err)
     iters = np.arange(1, len(hist_frac) + 1)
 
-    fig, (axL, axR) = plt.subplots(1, 2, figsize=(11.5, 3.6))
+    fig, (axL, axR) = plt.subplots(1, 2, figsize=(5.1, 3.8))
 
     ax2 = axL.twinx()
-    ax2.plot(iters, hist_x, color="steelblue", lw=1.4, ls="--", marker="s", ms=4,
-             alpha=0.7, label=f"${label}$")
-    ax2.set_ylabel(f"Tested ${label}$ [{unit}]", color="steelblue", fontsize=9)
+    ax2.plot(iters, hist_x, color="steelblue", ls="--", marker="s", label=f"${label}$")
+    ax2.set_ylabel(f"Tested ${label}$ [{unit}]", color="steelblue")
     ax2.tick_params(axis="y", labelcolor="steelblue"); ax2.set_yscale("log")
 
-    axL.errorbar(iters, hist_frac, yerr=hist_err, fmt="ko-", ms=5, lw=1.6,
-                 capsize=2, zorder=3, label="Fraction $\\pm$ MC error")
-    axL.axhline(cl, color="r", ls="--", lw=1.5, label=f"CL = {cl}")
+    axL.errorbar(iters, hist_frac, yerr=hist_err, fmt="ko-",
+                 label="Fraction $\\pm$ MC error")
+    axL.axhline(cl, color="r", ls="--", label=f"CL = {cl}")
     axL.set_xlabel("Iteration"); axL.set_ylabel("Fraction > target")
     axL.set_xticks(list(iters))
     axL.set_title(f"{method_label} convergence - ${label}^{{UL}}$ = {x_ul:.3e}")
     axL.set_zorder(ax2.get_zorder() + 1); axL.patch.set_visible(False)
     l1, lab1 = axL.get_legend_handles_labels(); l2, lab2 = ax2.get_legend_handles_labels()
-    axL.legend(l1 + l2, lab1 + lab2, frameon=False, fontsize=8)
+    axL.legend(l1 + l2, lab1 + lab2)
 
     order = np.argsort(hist_x)
     axR.errorbar(hist_x[order], hist_frac[order], yerr=hist_err[order], fmt="o-",
-                 color="k", ms=4, lw=1.2, capsize=2, label="simulated")
-    axR.axhline(cl, color="r", ls="--", lw=1.4, label=f"CL = {cl}")
-    axR.axvline(x_ul, color="g", lw=1.6, label=f"UL = {x_ul:.3e}")
+                 color="k", label="simulated")
+    axR.axhline(cl, color="r", ls="--", label=f"CL = {cl}")
+    axR.axvline(x_ul, color="g", label=f"UL = {x_ul:.3e}")
     if x_ul_lo_1sigma is not None and np.isfinite(x_ul_lo_1sigma):
         axR.axvspan(x_ul_lo_1sigma, x_ul_hi_1sigma, color="g", alpha=0.15, label="MC 1$\\sigma$")
     axR.set_xscale("log"); axR.set_xlabel(f"${label}$ [{unit}]")
     axR.set_ylabel("Fraction > target"); axR.set_ylim(-0.03, 1.03)
-    axR.set_title("Crossing curve"); axR.legend(frameon=False, fontsize=8, loc="upper left")
+    axR.set_title("Crossing curve"); axR.legend(loc="upper left")
 
     fig.tight_layout(); plt.show()
 
@@ -725,7 +724,7 @@ def plot_ul_fit(result, label="\\phi_0", unit="cm$^{-2}$s$^{-1}$TeV$^{-1}$", met
                 save_path=None):
     """
     Diagnostic of an upper limit from the fitted detection probability
-    (`simulate.run_fit_ul` / `run_fit_ul_3d`), in six panels:
+    (`simulate.run_fit_ul` / `run_fit_ul_3d`), in four panels:
 
     (a) every realisation's Lambda against its own injected x, by round, with
         the target -- the fraction of points above the line is what is fitted,
@@ -733,14 +732,10 @@ def plot_ul_fit(result, label="\\phi_0", unit="cm$^{-2}$s$^{-1}$TeV$^{-1}$", met
         realisations, the probit fit (solid where it was fitted, dotted where
         it is only extrapolated) and its 1/2 sigma bands, the no-signal floor
         f0 and, when below 1, the bright-source ceiling c,
-    (c) the same around the limit: where the curve crosses the CL is the limit,
-        and the green spans are its 1 and 2 sigma Monte-Carlo uncertainty,
-    (d) the likelihood profile of x_UL that those intervals come from, against
+    (c) the likelihood profile of x_UL that the MC intervals come from, against
         its Gaussian (Hessian) approximation,
-    (e) the estimate and its 1 sigma after each round, against the requested
-        precision,
-    (f) goodness of fit: pulls of observed vs expected detections, over the
-        realisations the fit used (from the window's lower edge up).
+    (d) the estimate and its 1 sigma after each round, against the requested
+        precision.
     """
     res = result
     x_ul, cl = res["x_ul"], res["cl"]
@@ -752,8 +747,8 @@ def plot_ul_fit(result, label="\\phi_0", unit="cm$^{-2}$s$^{-1}$TeV$^{-1}$", met
     tex = f"${label}^{{\\rm UL}}$"
     rel = f"{(lo1 / x_ul - 1) * 100:+.1f}% / {(hi1 / x_ul - 1) * 100:+.1f}%"
 
-    fig, axes = plt.subplots(2, 3, figsize=(16.5, 8.8))
-    (ax_a, ax_b, ax_c), (ax_d, ax_e, ax_f) = axes
+    fig, axes = plt.subplots(2, 2, figsize=(10.0, 7.2))
+    (ax_a, ax_b), (ax_c, ax_d) = axes
 
     # (a) the raw realisations
     for r_i, col in enumerate(colors):
@@ -784,70 +779,42 @@ def plot_ul_fit(result, label="\\phi_0", unit="cm$^{-2}$s$^{-1}$TeV$^{-1}$", met
              title="(b) Detection probability, whole scanned range")
     ax_b.legend(frameon=False, fontsize=7, loc="lower right")
 
-    # (c) around the limit
-    _plot_detection_curve(ax_c, res, (w_lo, w_hi))
-    _mark_ul(ax_c, res, with_2sigma=True)
-    c = res["curve"]
-    in_w = (c["x"] >= w_lo) & (c["x"] <= w_hi)
-    ax_c.set_ylim(max(0.0, np.nanmin(c["p"][in_w]) - 0.05), 1.01)
-    ax_c.text(0.97, 0.05, f"{tex} = {x_ul:.3e}\n1$\\sigma$ [{lo1:.3e}, {hi1:.3e}]\n({rel})",
-              transform=ax_c.transAxes, ha="right", va="bottom", fontsize=8,
-              bbox=dict(boxstyle="round", fc="white", ec=_C_UL, lw=0.8))
-    ax_c.set(xlabel=f"injected ${label}$ [{unit}]", ylabel="P($\\Lambda$ > target)",
-             title="(c) Around the limit: crossing and its 1/2$\\sigma$ MC uncertainty")
-    ax_c.legend(frameon=False, fontsize=7, loc="upper left")
-
-    # (d) likelihood profile
+    # (c) likelihood profile
     prof = res["profile"]
-    ax_d.plot(prof["x"], prof["delta_2nll"], color=_C_FIT, lw=1.8, label="profile likelihood")
+    ax_c.plot(prof["x"], prof["delta_2nll"], color=_C_FIT, lw=1.8, label="profile likelihood")
     se = np.sqrt(res["cov"][0, 0])
     if np.isfinite(se) and se > 0:
         tt = np.linspace(np.log10(prof["x"]).min(), np.log10(prof["x"]).max(), 200)
-        ax_d.plot(10 ** tt, ((tt - res["log10_x_ul"]) / se) ** 2, color="0.5", ls="--", lw=1.0,
+        ax_c.plot(10 ** tt, ((tt - res["log10_x_ul"]) / se) ** 2, color="0.5", ls="--", lw=1.0,
                   label="Gaussian (Hessian) approx.")
     for lvl, txt in ((1.0, "68.3%"), (4.0, "95.4%")):
-        ax_d.axhline(lvl, color="0.35", ls=":", lw=0.9)
-        ax_d.text(prof["x"].min(), lvl, f" {txt}", va="bottom", fontsize=7, color="0.35")
-    _mark_ul(ax_d, res, with_2sigma=True)
-    ax_d.set(xlabel=f"{tex} [{unit}]", ylabel="$-2\\,\\Delta \\ln L$", ylim=(0, 9),
-             title=f"(d) Likelihood profile of {tex}")
-    ax_d.legend(frameon=False, fontsize=7, loc="upper right")
+        ax_c.axhline(lvl, color="0.35", ls=":", lw=0.9)
+        ax_c.text(prof["x"].min(), lvl, f" {txt}", va="bottom", fontsize=7, color="0.35")
+    _mark_ul(ax_c, res, with_2sigma=True)
+    ax_c.set(xlabel=f"{tex} [{unit}]", ylabel="$-2\\,\\Delta \\ln L$", ylim=(0, 9),
+             title=f"(c) Likelihood profile of {tex}")
+    ax_c.legend(frameon=False, fontsize=7, loc="upper right")
 
-    # (e) convergence over rounds
+    # (d) convergence over rounds
     rounds = res["rounds"]
     n_tot = np.array([h["n_total"] for h in rounds])
     est = np.array([h["x_ul"] for h in rounds])
     yerr = np.array([[h["x_ul"] - h["x_ul_lo_1sigma"] for h in rounds],
                      [h["x_ul_hi_1sigma"] - h["x_ul"] for h in rounds]])
     if np.isfinite(lo1) and np.isfinite(hi1):
-        ax_e.axhspan(lo1, hi1, color=_C_UL, alpha=0.18, lw=0, label="final 1$\\sigma$")
+        ax_d.axhspan(lo1, hi1, color=_C_UL, alpha=0.18, lw=0, label="final 1$\\sigma$")
     for k in (-1, 1):
-        ax_e.axhline(x_ul * 10 ** (k * res["precision"]), color="0.4", ls="--", lw=0.9,
+        ax_d.axhline(x_ul * 10 ** (k * res["precision"]), color="0.4", ls="--", lw=0.9,
                      label=f"target $\\pm${res['precision']} dex" if k == 1 else None)
     for i, h in enumerate(rounds):
-        ax_e.errorbar(n_tot[i], est[i], yerr=yerr[:, i:i + 1], fmt="o", ms=5, capsize=3,
+        ax_d.errorbar(n_tot[i], est[i], yerr=yerr[:, i:i + 1], fmt="o", ms=5, capsize=3,
                       color=colors[min(h["round"], len(colors) - 1)])
-    ax_e.plot(n_tot, est, color="0.6", lw=0.8, zorder=0)
-    ax_e.set_yscale("log")
-    ax_e.set(xlabel="realisations so far", ylabel=f"{tex} [{unit}]",
-             title=f"(e) Estimate after each round (converged: {res['converged']})")
-    ax_e.legend(frameon=False, fontsize=7)
+    ax_d.plot(n_tot, est, color="0.6", lw=0.8, zorder=0)
+    ax_d.set_yscale("log")
+    ax_d.set(xlabel="realisations so far", ylabel=f"{tex} [{unit}]",
+             title=f"(d) Estimate after each round (converged: {res['converged']})")
+    ax_d.legend(frameon=False, fontsize=7)
 
-    # (f) goodness of fit
-    gof = res["gof"]
-    ax_f.axhspan(-2, 2, color="0.92", lw=0)
-    ax_f.axhspan(-1, 1, color="0.84", lw=0)
-    ax_f.axhline(0, color="0.3", lw=0.8)
-    ax_f.errorbar(gof["x"], gof["pulls"], yerr=1.0, fmt="o", ms=4, color="k", capsize=0, lw=1)
-    ax_f.axvline(x_ul, color=_C_UL, lw=1.2)
-    ax_f.set_xscale("log")
-    ax_f.set(xlabel=f"injected ${label}$ [{unit}]", ylabel="(observed $-$ expected) / $\\sigma$",
-             ylim=(-4, 4),
-             title=f"(f) Fit quality: $\\chi^2$/ndof = {gof['chi2']:.1f}/{gof['ndof']}, "
-                   f"p = {gof['pvalue']:.2f}")
-
-    for ax in axes.ravel():
-        _style_axis(ax)
     fig.suptitle(f"{method_label} upper limit from the fitted detection probability:  "
                  f"{tex} = {x_ul:.3e} {unit}  ({rel}, 1$\\sigma$ MC)  -  "
                  f"{res['n_sim_total']} realisations in {len(rounds)} rounds, CL = {cl}",
@@ -858,7 +825,7 @@ def plot_ul_fit(result, label="\\phi_0", unit="cm$^{-2}$s$^{-1}$TeV$^{-1}$", met
         print(f"BRACKET PROBLEM: {res['bracket_warning']}")
     if res.get("at_bracket_edge"):
         print(f"WARNING: the limit or its 1 sigma interval reaches the edge of the scanned {label} range.")
-    if gof["pvalue"] < 0.01:
+    if res["gof"]["pvalue"] < 0.01:
         print("WARNING: the probit does not describe the realisations in the fit window (p < 0.01).")
 
 
@@ -1214,17 +1181,6 @@ def blue_steps(n):
     return [cmap(x) for x in np.linspace(0.0, 1.0, n)]
 
 
-def _style_axis(ax):
-    ax.grid(True, color=_GRID, lw=0.6)
-    ax.set_axisbelow(True)
-    for side in ("top", "right"):
-        ax.spines[side].set_visible(False)
-    for side in ("left", "bottom"):
-        ax.spines[side].set_color(_TEXT_2)
-        ax.spines[side].set_linewidth(0.6)
-    ax.tick_params(colors=_TEXT_2, labelcolor=_TEXT)
-
-
 def _finish(fig, save_path):
     if save_path is not None:
         os.makedirs(os.path.dirname(str(save_path)) or ".", exist_ok=True)
@@ -1300,8 +1256,6 @@ def plot_distance_angle_corner(joints, colors=None, samples=None, levels=(0.5, 0
     ax_d.set_ylabel(r"$p(d_L)$")
     ax_t.set_xlim(0, 90); ax_t.set_xticks(np.arange(0, 91, 15)); ax_t.set_yticks([])
     ax_t.set_xlabel(r"$\theta_{\rm v}$ [deg]"); ax_t.set_ylabel(r"$p(\theta_{\rm v})$")
-    for ax in (ax_d, ax_j, ax_t):
-        _style_axis(ax)
 
     handles, hl = ax_d.get_legend_handles_labels()
     ax_leg.legend(handles, hl, loc="upper left", frameon=False, fontsize=9,
@@ -1366,8 +1320,6 @@ def plot_conditional_ridge(joint, quantiles=(0.05, 0.5, 0.95), samples=None,
     ax.legend(loc="upper right", frameon=False, fontsize=9)
     ax_m.plot(d, pd, color=ANGLE_KIND_COLORS["pe"], lw=2.0)
     ax_m.set_yticks([]); ax_m.set_ylabel(r"$p(d_L)$"); ax_m.set_xlabel(r"$d_L$ [Mpc]")
-    for a in (ax, ax_m):
-        _style_axis(a)
     if title:
         ax.set_title(title)
     return _finish(fig, save_path)
@@ -1437,9 +1389,6 @@ def plot_theta_distribution_comparison(dists, distance_Mpc=None, model_angles=No
     ax_b.set_xticks(x, [rf"$\theta_{{\rm v}}<{t}^\circ$" for t in thresholds])
     ax_b.set_ylim(0, 1); ax_b.set_ylabel("probability")
     ax_b.set_title("chance of a near-on-axis view", fontsize=10)
-    for a in axs.ravel():
-        _style_axis(a)
-    ax_b.grid(False, axis="x")
     if model_angles is not None and len(model_angles):
         handles.append(Line2D([], [], color=_GRID, lw=2.5, label="model file angles"))
     fig.legend(handles=handles, loc="upper center", ncol=min(len(handles), 4), frameon=False,
@@ -1478,7 +1427,6 @@ def plot_theta_sampler_check(dists, n=200_000, distance_Mpc=None, seed=0, save_p
                      fontsize=9)
         ax.set_xlim(0, 90); ax.set_xticks(np.arange(0, 91, 15)); ax.set_yticks([])
         ax.set_xlabel(r"$\theta_{\rm v}$ [deg]")
-        _style_axis(ax)
     for ax in axs.ravel()[n_panels:]:
         ax.axis("off")
     return _finish(fig, save_path)
@@ -1538,6 +1486,98 @@ def plot_model_angle_assignment(dists, model_angles, method="nearest", distance_
     ax.set_ylim(0, 1)
     ax.set_title(f"Which model file each option sends the draws to ({method})", fontsize=10)
     ax.legend(frameon=False, fontsize=8, loc="upper left", bbox_to_anchor=(1.01, 1.0))
-    _style_axis(ax)
-    ax.grid(False, axis="x")
+    return _finish(fig, save_path)
+
+
+# Sky regions of the sky-dependence check: the validated categorical order.
+REGION_COLORS = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#4a3aa7")
+
+
+def plot_sky_dependence_check(theta_deg, distance_Mpc, ra_deg, dec_deg, result, title=None,
+                              save_path=None):
+    """The four views of `angle_distribution.sky_dependence_check`:
+    (a) the sky regions; (b) the median of p(theta | d) along d in each region
+    (solid) against the sky-marginalised one (black); (c) theta in each region,
+    exact (filled) vs the shortcut at the region's distances (dashed);
+    (d) the PIT values u = F_pooled(theta | d): ECDF(u) - u per region, with
+    the pooled curve (black) as the reference the KDE smoothing alone gives."""
+    t = np.asarray(theta_deg, dtype=float)
+    d = np.asarray(distance_Mpc, dtype=float)
+    lab = result["labels"]
+    rows = result["regions"]
+    cols = [REGION_COLORS[i % len(REGION_COLORS)] for i in range(len(rows))]
+    fig, axs = plt.subplots(2, 2, figsize=(11, 8), gridspec_kw={"hspace": 0.35, "wspace": 0.25})
+    (ax_s, ax_r), (ax_h, ax_u) = axs
+
+    # (a) sky, RA wrapped around the samples' circular mean, increasing to the left
+    ra0 = np.degrees(np.angle(np.mean(np.exp(1j * np.radians(ra_deg)))))
+    ra_w = (np.asarray(ra_deg) - ra0 + 180.0) % 360.0 - 180.0 + ra0
+    for r, c in zip(rows, cols):
+        m = lab == r["region"]
+        ax_s.plot(ra_w[m], np.asarray(dec_deg)[m], ".", ms=1.5, color=c, alpha=0.4, rasterized=True)
+        ax_s.plot([], [], "o", color=c, label=f"region {r['region']} (n = {r['n']})")
+    lo, hi = np.percentile(ra_w, [0.2, 99.8]); pad = 0.08 * (hi - lo)
+    ax_s.set_xlim(hi + pad, lo - pad)
+    lo, hi = np.percentile(dec_deg, [0.2, 99.8]); pad = 0.08 * (hi - lo)
+    ax_s.set_ylim(lo - pad, hi + pad)
+    ax_s.set_xlabel("RA [deg]"); ax_s.set_ylabel("Dec [deg]")
+    ax_s.set_title("(a) sky regions (PE samples)", fontsize=10)
+    ax_s.legend(frameon=False, fontsize=8, markerscale=1.0)
+
+    # (b) median of p(theta | d) along d: Gaussian-weighted in d, no grid
+    dgrid = np.linspace(*np.percentile(d, [3, 97]), 60)
+    h = 0.1 * (np.percentile(d, 84) - np.percentile(d, 16))
+
+    def ridge(mask):
+        out = np.full(dgrid.size, np.nan)
+        o = np.argsort(t[mask]); ts, ds = t[mask][o], d[mask][o]
+        for i, x in enumerate(dgrid):
+            w = np.exp(-0.5 * ((ds - x) / h) ** 2)
+            if w.sum() > 20:   # at least ~20 effective samples near x
+                c = np.cumsum(w)
+                out[i] = np.interp(0.5 * c[-1], c, ts)
+        return out
+
+    ax_r.plot(dgrid, ridge(np.ones(t.size, bool)), color=_TEXT, lw=2.5, label="all sky (shortcut)")
+    for r, c in zip(rows, cols):
+        ax_r.plot(dgrid, ridge(lab == r["region"]), color=c, lw=1.5, label=f"region {r['region']}")
+    ax_r.set_xlabel(r"$d_L$ [Mpc]"); ax_r.set_ylabel(r"median of $p(\theta_{\rm v}\,|\,d_L)$ [deg]")
+    ax_r.set_title("(b) the d-theta relation per region", fontsize=10)
+    ax_r.legend(frameon=False, fontsize=8)
+
+    # (c) theta per region: exact vs shortcut at the region's own distances
+    bins = np.linspace(0, 90, 46)
+    for i, (r, c) in enumerate(zip(rows, cols)):
+        m = lab == r["region"]
+        ax_h.hist(t[m], bins=bins, density=True, histtype="step", color=c, lw=1.8,
+                  label=f"region {r['region']}: {r['median_shift_deg']:+.1f} deg median shift")
+        ax_h.hist(t, bins=bins, weights=result["shortcut_weights"][i], density=True,
+                  histtype="step", color=c, lw=1.0, ls="--")
+    ax_h.plot([], [], color=_TEXT_2, lw=1.8, label=r"exact $p(\theta\,|\,d, {\rm sky})$")
+    ax_h.plot([], [], color=_TEXT_2, lw=1.0, ls="--", label=r"shortcut $p(\theta\,|\,d)$")
+    ax_h.set_xlim(0, 90); ax_h.set_xticks(np.arange(0, 91, 15)); ax_h.set_yticks([])
+    ax_h.set_xlabel(r"$\theta_{\rm v}$ [deg]")
+    ax_h.set_title(r"(c) $\theta_{\rm v}$ in each region", fontsize=10)
+    ax_h.legend(frameon=False, fontsize=7)
+
+    # (d) PIT: ECDF(u) - u
+    uu = result["u"]
+    grid = np.linspace(0, 1, 201)
+    ecdf = lambda x: np.searchsorted(np.sort(x), grid, side="right") / x.size - grid
+    ax_u.plot(grid, ecdf(uu), color=_TEXT, lw=2.5, label="all sky (KDE smoothing only)")
+    for r, c in zip(rows, cols):
+        ax_u.plot(grid, ecdf(uu[lab == r["region"]]), color=c, lw=1.5,
+                  label=f"region {r['region']}: p = {r['p_value']:.3f}")
+    ax_u.axhline(0, color=_TEXT_2, lw=0.8)
+    ax_u.set_xlabel(r"$u = F(\theta_k\,|\,d_k)$, sky-marginalised")
+    ax_u.set_ylabel("ECDF(u) - u")
+    ax_u.set_title(f"(d) PIT check (global p = {result['p_value_global']:.3f}, "
+                   f"{result['n_perm']} permutations)", fontsize=10)
+    ax_u.legend(frameon=False, fontsize=8, loc="best")
+
+    for ax in axs.ravel():
+        ax.grid(True, color=_GRID, lw=0.6); ax.set_axisbelow(True)
+        ax.spines[["top", "right"]].set_visible(False)
+    if title:
+        fig.suptitle(title, fontsize=11)
     return _finish(fig, save_path)

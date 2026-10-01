@@ -10,6 +10,13 @@ GW_INPUT_DIR = DATA_DIR / "gw_input"
 TMP_DIR = DATA_DIR / "tmp"
 SLURM_OUTPUT_DIR = DATA_DIR / "slurm_output"
 
+# EBL tables (gwuls.grb_model.ebl_transmission, Step 7): gammapy only needs an
+# ebl/ subdirectory to find its built-in absorption models, so data/ebl/ (a few
+# MB, tracked in git) doubles as a GAMMAPY_DATA root. Don't override a GAMMAPY_DATA
+# the user has already set (e.g. to a full gammapy-datasets checkout).
+EBL_DIR = DATA_DIR / "ebl"
+os.environ.setdefault("GAMMAPY_DATA", str(DATA_DIR))
+
 # Emission models (setup_model.ipynb): raw = as delivered (e.g. INAF catO5_*.fits),
 # standardized = gwuls.grb_model's own .npz cache (Steps 1-2 of the simulation
 # guidelines), which is what sim_3d actually loads -- it never touches a raw file.

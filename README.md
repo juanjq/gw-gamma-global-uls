@@ -110,6 +110,13 @@ prepared separately, ahead of time, by their own notebooks:
   The physics, equations and validation checks behind it are written up in
   [`docs/viewing_angle_distribution.md`](docs/viewing_angle_distribution.md).
 
+In `sim_3d_model_CTAO_paper.ipynb` the emission-model 3D limit (`RUN_MODEL_3D`) injects the
+fixed phenomenological jet (`model_dir_3d`, default `.../grb_afterglow_phenomenological/benchmark`).
+Each realisation draws a sky position, a distance and a viewing angle. `THETA_MODE` sets the
+angle: `"gw"` (the alert's p(θ_v | d), the default and the event-specific choice), `"fixed"`
+(`THETA_FIXED_DEG`), `"isotropic"` or `"schutz"`. See
+[`docs/physics_and_methods.md`](docs/physics_and_methods.md) §11.
+
 ## Setup
 
 ```bash

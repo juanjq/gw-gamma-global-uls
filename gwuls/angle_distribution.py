@@ -66,6 +66,8 @@ __all__ = [
     "detection_probability",
     "hpd_levels",
     "conditional_theta_by_resampling",
+    "sky_regions",
+    "sky_dependence_check",
     "fold_viewing_angle",
 ]
 
@@ -363,6 +365,25 @@ class JointDistanceAngle:
             raise ValueError("zero probability for that angle (or angle range)")
         return self.distance_Mpc, col / norm
 
+    def conditional_cdf(self, distance_Mpc, theta_deg) -> np.ndarray:
+        """F(theta | d) = P(theta_v <= theta | d), one value per (d, theta)
+        pair (vectorised, the joint interpolated linearly in d as in
+        `sample_theta_given_distance`). At the samples the joint came from,
+        these are the probability-integral-transform values: uniform on [0, 1]
+        if the samples follow p(theta | d)."""
+        d = np.atleast_1d(np.asarray(distance_Mpc, dtype=float))
+        t = np.broadcast_to(np.asarray(theta_deg, dtype=float), d.shape)
+        out = np.empty(d.size)
+        for s in range(0, d.size, 20_000):
+            j, w, _ = self._rows_at(d[s:s + 20_000])
+            cum = (1 - w)[:, None] * self._cum_theta[j] + w[:, None] * self._cum_theta[j + 1]
+            k = np.clip(np.searchsorted(self.theta_deg, t[s:s + 20_000]) - 1, 0, self.theta_deg.size - 2)
+            rows = np.arange(j.size)
+            x0, x1 = self.theta_deg[k], self.theta_deg[k + 1]
+            frac = np.clip((t[s:s + 20_000] - x0) / (x1 - x0), 0.0, 1.0)
+            out[s:s + 20_000] = (cum[rows, k] + frac * (cum[rows, k + 1] - cum[rows, k])) / cum[:, -1]
+        return np.clip(out, 0.0, 1.0)
+
     # -- sampling -----------------------------------------------------------
     def sample_theta_given_distance(self, distance_Mpc, rng: Optional[np.random.Generator] = None,
                                     return_outside: bool = False):
@@ -465,6 +486,154 @@ def conditional_theta_by_resampling(theta_deg_samples, distance_Mpc_samples, dis
         raise ValueError(f"no samples near d={distance_Mpc:.0f} Mpc")
     idx = rng.choice(d.size, size=size, replace=True, p=w / w.sum())
     return np.asarray(theta_deg_samples, dtype=float)[idx]
+
+
+# ===========================================================================
+# Does theta depend on the sky position at fixed d?
+# ===========================================================================
+
+def sky_regions(ra_deg, dec_deg, n_regions: int = 3, min_fraction: float = 0.05,
+                n_restarts: int = 20, n_iter: int = 100, seed: int = 0) -> np.ndarray:
+    """Split posterior samples into `n_regions` contiguous sky regions:
+    k-means on the unit sphere (each region is the set of samples closest in
+    angle to its centre, so regions are Voronoi cells -- connected patches,
+    and separate modes of a multimodal localisation end up apart). The best
+    of `n_restarts` k-means++ starts is kept, among those whose smallest
+    region holds at least `min_fraction` of the samples (so a handful of
+    outlying samples cannot become a region of their own). Returns one
+    integer label (0 .. n_regions-1) per sample, largest region first."""
+    ra, dec = np.radians(np.asarray(ra_deg, dtype=float)), np.radians(np.asarray(dec_deg, dtype=float))
+    v = np.column_stack([np.cos(dec) * np.cos(ra), np.cos(dec) * np.sin(ra), np.sin(dec)])
+    rng = np.random.default_rng(seed)
+    # seeds only from the 99% of samples nearest the mean direction: k-means++
+    # favours far points, and would otherwise seed on isolated outliers
+    mean_dir = v.mean(axis=0) / np.linalg.norm(v.mean(axis=0))
+    cos_mean = v @ mean_dir
+    core = v[cos_mean >= np.quantile(cos_mean, 0.01)]
+    best, best_cost = None, np.inf
+    for _ in range(n_restarts):
+        centres = [core[rng.integers(core.shape[0])]]
+        for _ in range(1, n_regions):                   # k-means++ seeding
+            dist2 = np.clip(1.0 - np.max(core @ np.array(centres).T, axis=1), 0.0, None)
+            centres.append(core[rng.choice(core.shape[0], p=dist2 / dist2.sum())])
+        centres = np.array(centres)
+        for _ in range(n_iter):
+            lab = np.argmax(v @ centres.T, axis=1)
+            new = np.array([v[lab == k].sum(axis=0) if np.any(lab == k) else centres[k]
+                            for k in range(n_regions)])
+            new /= np.linalg.norm(new, axis=1, keepdims=True)
+            if np.allclose(new, centres):
+                break
+            centres = new
+        sizes = np.bincount(lab, minlength=n_regions)
+        cost = np.sum(1.0 - np.max(v @ centres.T, axis=1))
+        if sizes.min() >= min_fraction * v.shape[0] and cost < best_cost:
+            best, best_cost = lab, cost
+    if best is None:
+        raise ValueError(f"no split into {n_regions} sky regions of >= {min_fraction:.0%} "
+                         "of the samples each; use fewer regions")
+    order = np.argsort(-np.bincount(best, minlength=n_regions))
+    return np.argsort(order)[best]
+
+
+def _weighted_quantile(x, w, q):
+    o = np.argsort(x)
+    c = np.cumsum(w[o])
+    return float(np.interp(q * c[-1], c, x[o]))
+
+
+def sky_dependence_check(theta_deg, distance_Mpc, regions, joint: Optional[JointDistanceAngle] = None,
+                         theta_cut_deg: float = 20.0, n_perm: int = 300, n_distance_bins: int = 40,
+                         rng: Optional[np.random.Generator] = None) -> dict:
+    """Test whether p(theta_v | d) is the same in every sky region, i.e.
+    whether the sky-marginalised conditional p(theta | d) may stand in for the
+    per-sky-position p(theta | d, sky) of the strict chain
+    sky -> d | sky -> theta | d, sky.
+
+    `regions`: one integer label per posterior sample (e.g. from
+    `sky_regions`, or "inside / outside the IACT pointings"). `joint`: the
+    pooled KDE joint of the same samples (built here if None).
+
+    The samples are cut into `n_distance_bins` equal-count distance bins.
+    Per region r:
+
+    - *exact*: the region's own samples -- draws of p(theta | d, r);
+    - *shortcut*: all samples, each weighted by the fraction of its distance
+      bin that lies in r -- the pooled p(theta | d) taken at the region's own
+      distances, i.e. what drawing theta from the sky-marginalised conditional
+      gives there. Grid-free, so the KDE smoothing plays no part;
+    - their differences in median theta and in P(theta < theta_cut) are what
+      the shortcut costs in that region;
+    - formal test: u_k = F_pooled(theta_k | d_k) from the KDE grid; with no
+      sky dependence, u is uniform in every region. Statistic: sqrt(n) x the
+      KS distance of the region's u from uniform.
+
+    Null distribution (no sky dependence at fixed d): region labels permuted
+    within each distance bin, `n_perm` times. It gives the p-values and the
+    noise level (sd) of the shifts. Any KDE bias in u affects observed and
+    permuted regions alike, so it does not fake a signal.
+    Returns {"regions": [one dict per region], "p_value_global", "u",
+    "shortcut_weights" (n_regions, n_samples), ...}.
+    """
+    rng = rng if rng is not None else np.random.default_rng()
+    t = np.asarray(theta_deg, dtype=float)
+    d = np.asarray(distance_Mpc, dtype=float)
+    lab = np.asarray(regions)
+    labels = np.unique(lab)
+    if joint is None:
+        joint = JointDistanceAngle.from_samples(d, t)
+    u = joint.conditional_cdf(d, t)
+    below = t < theta_cut_deg
+
+    def stats(lab_):
+        out = np.empty((labels.size, 3))
+        for i, r in enumerate(labels):
+            m = lab_ == r
+            ur = np.sort(u[m])
+            n = ur.size
+            ks = max(np.max(np.arange(1, n + 1) / n - ur), np.max(ur - np.arange(n) / n))
+            out[i] = (np.sqrt(n) * ks, np.median(t[m]), below[m].mean())
+        return out
+
+    dbin = np.searchsorted(np.quantile(d, np.linspace(0, 1, n_distance_bins + 1)[1:-1]), d)
+    n_bin = np.bincount(dbin, minlength=n_distance_bins)
+    weights = np.stack([np.bincount(dbin[lab == r], minlength=n_distance_bins)[dbin] / n_bin[dbin]
+                        for r in labels])
+    weights /= weights.sum(axis=1, keepdims=True)
+
+    obs = stats(lab)
+    groups = [np.flatnonzero(dbin == b) for b in range(n_distance_bins)]
+    null = np.empty((n_perm,) + obs.shape)
+    for p in range(n_perm):
+        perm = lab.copy()
+        for g in groups:
+            perm[g] = lab[rng.permutation(g)]
+        null[p] = stats(perm)
+
+    rows = []
+    for i, r in enumerate(labels):
+        m = lab == r
+        med_sc = _weighted_quantile(t, weights[i], 0.5)
+        p_sc = float(np.sum(weights[i] * below))
+        rows.append({
+            "region": int(r), "n": int(m.sum()),
+            "distance_Mpc_median": float(np.median(d[m])),
+            "theta_median_exact": float(obs[i, 1]),
+            "theta_median_shortcut": med_sc,
+            "median_shift_deg": float(obs[i, 1] - med_sc),
+            "median_shift_null_sd": float(np.std(null[:, i, 1])),
+            "p_below_cut_exact": float(obs[i, 2]),
+            "p_below_cut_shortcut": p_sc,
+            "p_below_cut_shift": float(obs[i, 2] - p_sc),
+            "p_below_cut_shift_null_sd": float(np.std(null[:, i, 2])),
+            "ks_sqrt_n": float(obs[i, 0]),
+            "p_value": float((1 + np.sum(null[:, i, 0] >= obs[i, 0])) / (n_perm + 1)),
+        })
+    glob_null = null[:, :, 0].max(axis=1)
+    return {"regions": rows, "labels": lab, "u": u, "shortcut_weights": weights,
+            "theta_cut_deg": theta_cut_deg,
+            "p_value_global": float((1 + np.sum(glob_null >= obs[:, 0].max())) / (n_perm + 1)),
+            "n_perm": n_perm, "n_distance_bins": n_distance_bins}
 
 
 # ===========================================================================
