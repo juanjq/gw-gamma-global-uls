@@ -1518,6 +1518,9 @@ def _fake_from_runs(dataset, runs, coord, energy_obs_TeV, spectra, seed, name):
         signal = np.clip(np.nan_to_num(signal, nan=0.0, posinf=0.0, neginf=0.0), 0.0, None)
         data = data + signal
         n_signal += float(signal.sum())
+    # The background model can dip slightly below zero (pybkgmodel: ~-1e-8 in a few
+    # pixels); MapDataset.npred() clips the total at 0 before fake(), so do the same.
+    data = np.clip(data, 0.0, None)
     npred.data = get_random_state(seed).poisson(data).astype(float)
     dataset.counts = npred
     return n_signal
