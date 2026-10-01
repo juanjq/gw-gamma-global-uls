@@ -43,16 +43,17 @@ iteration $i$ it draws one possible source and simulates its IACT observation
 flowchart LR
   A["sky pixel<br/>(RA_i, Dec_i)"] --> B["distance d_i<br/>(skymap, per pixel)"]
   B --> C["viewing angle θ_i<br/>drawn from p(θ | d_i)"]
-  C --> D["model file at θ_i<br/>(Step 5)"]
+  C --> D["model at θ_i<br/>(Step 5)"]
   D --> E["normalise to L_k,<br/>flux at d_i, z_i, EBL"]
   E --> F["simulated observation<br/>→ TS_i"]
 ```
 
-The angle only enters through the **shape** of the emission model. The model is rescaled to
-the trial luminosity $L_k$, but a larger viewing angle delays the light-curve peak and softens
-the spectrum. With the INAF catalogue this means **choosing which model file** to use (at
-9.1°, 13.2°, 22.6°, 28.6° or 77.8°). The angle distribution therefore decides which light
-curves the upper limit is built from.
+Under the default normalisation (`"gti_mean"`) the model is rescaled to the trial luminosity
+$L_k$, so the angle only enters through the **shape** of the emission model: a larger viewing
+angle delays the light-curve peak by orders of magnitude. The model `sim_3d` injects, the fixed
+phenomenological jet ([`phenomenological_model.md`](phenomenological_model.md)), is tabulated
+every 1°. With the five INAF catO5 files instead, the angle **chooses which file** to use (Section
+10). Either way, the angle distribution decides which light curves the upper limit is built from.
 
 The notebook answers one question per alert: *what is $p(\theta_\mathrm{v} \mid d)$ for this
 alert, given whatever LVK has released?* It writes the answer to
@@ -684,7 +685,12 @@ says:
 
 ## 10. Where the choice reaches the upper limit
 
-`sim_3d` has model files only at a few angles, and each drawn $\theta_i$ is mapped to one of
+*This section applies to the five catO5 files. The phenomenological jet that `sim_3d` injects
+by default is tabulated every 1°, so no binning onto files happens there. Its light curve
+changes continuously with angle: at 11 h it is $10^{-5}$ of the on-axis flux at 50°
+([`phenomenological_model.md`](phenomenological_model.md) §4).*
+
+With the catO5 set, model files exist only at a few angles, and each drawn $\theta_i$ is mapped to one of
 them (`GRBModelSet.get_model`, Step 5). With sorted file angles $\theta_1 < \dots < \theta_K$,
 the fraction of iterations that use file $k$ is:
 
@@ -731,6 +737,13 @@ reduce this sensitivity.
 
 ## 11. How `sim_3d` uses the result
 
+In the emission-model limit of `sim_3d` (`RUN_MODEL_3D`), `theta_dist_path` points at the saved
+cache, and `simulate.EmissionModelInjection` draws $\theta_i \sim p(\theta \mid d_i)$ for every
+realisation, using the distance that realisation drew from the skymap
+([`physics_and_methods.md`](physics_and_methods.md) §11). For S240615dg the drawn angles have
+5/50/95% quantiles of 9.7° / 33° / 57°, more inclined than the PE alone for the reason given in
+Section 8. The calls underneath are:
+
 ```python
 from gwuls import angle_distribution as angdist, paths
 
@@ -776,15 +789,16 @@ run the notebook. Part 0 standardizes the file and updates `index.csv`. Commit
 - **Model file coverage.** No file lies between 28.6° and 77.8°, so the treatment of that
   gap (nearest vs stochastic vs interpolation) matters for the prior-driven options
   (Section 10).
-- **Not yet wired into `sim_3d`.** The loader and the three calls above are ready; the
-  numerical-model version of `sim_3d` still has to call them.
+- **`sample_joint` is not used by `sim_3d` yet.** The emission-model limit draws $\theta$
+  conditional on the skymap distance (Section 11), so it carries the bias of Section 8.
 
 ---
 
 ## 13. References
 
 - L. S. Finn and D. F. Chernoff, *Observing binary inspiral in gravitational radiation: one
-  interferometer*, Phys. Rev. D **47**, 2198 (1993): the orientation factor $\Theta$.
+  interferometer*, Phys. Rev. D **47**, 2198 (1993), [arXiv:gr-qc/9301003](https://arxiv.org/abs/gr-qc/9301003):
+  the orientation factor $\Theta$.
 - B. F. Schutz, *Networks of gravitational wave detectors and three figures of merit*, Class.
   Quantum Grav. **28**, 125023 (2011), [arXiv:1102.5421](https://arxiv.org/abs/1102.5421):
   the detected-source inclination distribution (Eq. 28) and its derivation from the
@@ -795,7 +809,9 @@ run the notebook. Part 0 standardizes the file and updates `index.csv`. Commit
   $(d_L, \cos\iota)$ distribution (their Fig. 3), the distance–inclination degeneracy.
 - L. P. Singer et al., *Going the distance: mapping host galaxies of LIGO and Virgo sources
   in three dimensions using local cosmography and targeted follow-up*, ApJL **829**, L15
-  (2016): the per-pixel distance ansatz of the skymaps.
-- D. W. Scott, *Multivariate Density Estimation* (Wiley, 1992): the bandwidth rule.
+  (2016), [arXiv:1603.07333](https://arxiv.org/abs/1603.07333): the per-pixel distance ansatz of
+  the skymaps.
+- D. W. Scott, *Multivariate Density Estimation: Theory, Practice, and Visualization* (Wiley,
+  1992): the bandwidth rule.
 - LVK, GWTC-5.0 parameter-estimation data release (Zenodo): the `combined_PEDataRelease` and
   `PESummaryTable` files.

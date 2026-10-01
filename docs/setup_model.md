@@ -55,6 +55,11 @@ flowchart LR
 The output is a small cache, one `.npz` per angle, that `sim_3d` loads with one call. It
 never parses a FITS file or needs to know how the model was built.
 
+**Which model `sim_3d` injects.** By default `sim_3d` injects the fixed phenomenological jet of
+[`phenomenological_model.md`](phenomenological_model.md), which is stored in this same format on
+a 1° grid. The catO5 files are the same recipe applied to five individual events. This document
+describes the format they share (Sections 3 and 6) and the catO5 cache itself (Sections 2 and 4).
+
 ---
 
 ## 2. The input: the catO5 catalogue
@@ -164,8 +169,11 @@ $$
 F_i(E, t) = \frac{(1+z_i)^2}{4\pi d_i^2}\; L\big((1+z_i)E,\; t/(1+z_i)\big)\; e^{-\tau(E, z_i)}. \tag{3}
 $$
 
-EBL absorption $e^{-\tau}$ (Domínguez et al. 2011, via gammapy) is applied only here, at the
-drawn $z_i$. It is never applied at the file's own $z^m$, because the files do not contain it.
+EBL absorption $e^{-\tau}$ (via gammapy) is applied only here, at the drawn $z_i$. It is never
+applied at the file's own $z^m$, because the files do not contain it. `to_observer` defaults to
+Domínguez et al. (2011). `sim_3d` passes `EBL_REFERENCE = "franceschini17"` (Franceschini &
+Rodighiero 2017), the model of Abe et al. (2026). The tables ship in `data/ebl/`, and
+`gwuls.paths` sets `$GAMMAPY_DATA` to `data/` if it is unset.
 
 ### 3.4 Checks
 
@@ -173,8 +181,8 @@ drawn $z_i$. It is never applied at the file's own $z^m$, because the files do n
   the raw file. Maximum relative error: exactly 0 for all five files.
 - **EBL spot-check.** Fit a power law to the 10 lowest energies of one time column,
   extrapolate it, and compare the high-energy deficit with $e^{-\tau(E, z^m)}$. An intrinsic
-  file stays near ratio 1 where EBL would already suppress the flux below 0.7. This needs
-  `$GAMMAPY_DATA` for the EBL tables and was skipped in the last run (not set).
+  file stays near ratio 1 where EBL would already suppress the flux below 0.7. This needs the
+  EBL tables. It was skipped in the last recorded run, before `data/ebl/` was added.
 
 ---
 
@@ -487,6 +495,15 @@ model_i = model_set.get_model(theta_i, method="interp")      # peak-aligned; or 
 E_obs, t_obs, F_i = model_i.to_observer(d_i, z_i, energy_obs=E_grid, time_obs=t_grid, apply_ebl=True)
 ```
 
+In `sim_3d` these calls are made by `simulate.EmissionModelInjection`
+([`physics_and_methods.md`](physics_and_methods.md) §11), which also averages the model over
+each run's GTIs and normalises it to $L_k$. Any cache in this format can be injected by setting
+`model_dir_3d` to its directory. Note that the injection loads the set **as it is**: it does not
+call `rescaled_to_eiso`, and it interpolates between angles at fixed $t'$
+(`align_peaks=False`). That is right for the 1° phenomenological grid, but not for the five
+catO5 files (Sections 4.2 and 4.5). To inject them, save a rescaled set first, and use
+`theta_method="nearest"` or add peak alignment to the injection.
+
 ---
 
 ## 7. Caveats and open points
@@ -510,22 +527,35 @@ E_obs, t_obs, F_i = model_i.to_observer(d_i, z_i, energy_obs=E_grid, time_obs=t_
 - **Extrapolation.** Outside the tabulated $(E', t')$ grid the model continues as a local
   power law. Observation windows should stay within $t' \lesssim 10^6\,\mathrm{s}$ and the
   1 GeV – 10 TeV band of each file.
-- **EBL spot-check not run** in the last execution (no `$GAMMAPY_DATA`).
-- **Not yet wired into `sim_3d`.** The loader and calls above are ready; the numerical-model
-  version of `sim_3d` still has to call them.
+- **EBL spot-check not run** in the last recorded execution (Section 3.4).
+- **The catO5 set is not what `sim_3d` injects.** `sim_3d` uses the phenomenological benchmark
+  ([`phenomenological_model.md`](phenomenological_model.md)). Injecting the catO5 set needs the
+  preparation described at the end of Section 6.
 
 ---
 
 ## 8. References
 
 - R. D. Blandford and C. F. McKee, *Fluid dynamics of relativistic blast waves*, Phys.
-  Fluids **19**, 1130 (1976): the self-similar blast wave.
+  Fluids **19**, 1130 (1976), [doi:10.1063/1.861619](https://doi.org/10.1063/1.861619): the
+  self-similar blast wave.
 - R. Sari, T. Piran and R. Narayan, *Spectra and light curves of gamma-ray burst
-  afterglows*, ApJL **497**, L17 (1998): the synchrotron scalings of Section 4.3.
+  afterglows*, ApJL **497**, L17 (1998), [arXiv:astro-ph/9712005](https://arxiv.org/abs/astro-ph/9712005):
+  the synchrotron scalings of Section 4.3.
 - H. J. van Eerten and A. I. MacFadyen, *Gamma-ray burst afterglow scaling relations for the
-  full blast wave evolution*, ApJL **747**, L30 (2012): scale invariance in $E$ and $n$.
+  full blast wave evolution*, ApJL **747**, L30 (2012), [arXiv:1111.3355](https://arxiv.org/abs/1111.3355):
+  scale invariance in $E$ and $n$.
 - A. Domínguez et al., *Extragalactic background light inferred from AEGIS galaxy-SED-type
-  fractions*, MNRAS **410**, 2556 (2011): the EBL model of Eq. (3).
+  fractions*, MNRAS **410**, 2556 (2011), [arXiv:1007.1459](https://arxiv.org/abs/1007.1459): the
+  default EBL model of Eq. (3).
+- A. Franceschini and G. Rodighiero, *The extragalactic background light revisited and the
+  cosmic photon-photon opacity*, A&A **603**, A34 (2017),
+  [arXiv:1705.10256](https://arxiv.org/abs/1705.10256): the EBL model `sim_3d` uses.
+- H. Abe et al. (CTAO Consortium), *Chasing gamma-ray signals from binary neutron star
+  coalescences with the Cherenkov Telescope Array: prospects and observing strategies*, ApJ
+  **1004**, 46 (2026), [arXiv:2604.08748](https://arxiv.org/abs/2604.08748): the recipe behind the
+  catO5 files ([`phenomenological_model.md`](phenomenological_model.md)).
 - Planck Collaboration, *Planck 2018 results. VI. Cosmological parameters*, A&A **641**, A6
-  (2020): the cosmology for $z(d_L)$.
-- B. Patricelli et al., CTA-GW consortium O5 BNS catalogue: the `catO5_*.fits` files.
+  (2020), [arXiv:1807.06209](https://arxiv.org/abs/1807.06209): the cosmology for $z(d_L)$.
+- B. Patricelli et al., CTA-GW consortium O5 BNS catalogue (internal): the events behind the
+  `catO5_*.fits` files, which were computed by L. Nava (Sept 2021).
