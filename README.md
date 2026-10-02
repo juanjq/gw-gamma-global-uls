@@ -39,8 +39,11 @@ notebooks/
 │                                                # into a fixed benchmark model
 ├── setup_angle_distribution.ipynb  # run once per GW alert: standardizes its PE file and
 │                                     # p(d, theta_v) / p(theta|d) for it
-└── sim_3d_model_CTAO_paper.ipynb   # main pipeline: data prep, then the 2D flux and 3D
-                                      # luminosity upper limits (docs/physics_and_methods.md)
+├── sim_3d_model_CTAO_paper_pe_joint.ipynb  # MAIN pipeline: data prep, then the 2D flux and 3D
+│                                             # luminosity upper limits (docs/physics_and_methods.md);
+│                                             # the emission-model limit draws (sky, d, theta_v)
+│                                             # together from the PE by default
+└── sim_3d_model_CTAO_paper.ipynb   # previous version: emission-model draws from the skymap only
 
 data/
 ├── gw_input/                  # small, trackable inputs: GW skymap .fits + generated
@@ -110,12 +113,21 @@ prepared separately, ahead of time, by their own notebooks:
   The physics, equations and validation checks behind it are written up in
   [`docs/viewing_angle_distribution.md`](docs/viewing_angle_distribution.md).
 
-In `sim_3d_model_CTAO_paper.ipynb` the emission-model 3D limit (`RUN_MODEL_3D`) injects the
-fixed phenomenological jet (`model_dir_3d`, default `.../grb_afterglow_phenomenological/benchmark`).
-Each realisation draws a sky position, a distance and a viewing angle. `THETA_MODE` sets the
-angle: `"gw"` (the alert's p(θ_v | d), the default and the event-specific choice), `"fixed"`
-(`THETA_FIXED_DEG`), `"isotropic"` or `"schutz"`. See
-[`docs/physics_and_methods.md`](docs/physics_and_methods.md) §11.
+In [`sim_3d_model_CTAO_paper_pe_joint.ipynb`](notebooks/sim_3d_model_CTAO_paper_pe_joint.ipynb),
+the main notebook, the emission-model 3D limit (`RUN_MODEL_3D`) injects the fixed phenomenological
+jet (`model_dir_3d`, default `.../grb_afterglow_phenomenological/benchmark`). Each realisation draws
+a sky position, a distance and a viewing angle, set by two options:
+
+| option | values |
+| --- | --- |
+| `SKY_DISTANCE_MODE` | `"pe"` (default): one PE posterior sample per realisation, from `data/gw_pe/standardized/<alert>.h5` (`PE_SOURCE`); `"skymap"`: a skymap bin and its distance ansatz |
+| `THETA_MODE` | `"pe"` (default): the angle of the same PE sample, so (sky, d, θ_v) come from the exact joint posterior; `"gw"`: the alert's p(θ_v \| d) from `setup_angle_distribution.ipynb`; `"fixed"` (`THETA_FIXED_DEG`); `"isotropic"`; `"schutz"`; `"two_bin"` (`THETA_TWO_BIN`); `"selection"` (`THETA_HORIZON_MPC`) |
+
+`THETA_MODE = "pe"` needs `SKY_DISTANCE_MODE = "pe"`. For an alert without released PE, use
+`"skymap"` with `"schutz"`, `"selection"` or `"fixed"`. Every cache name of the model limit carries
+the choice, and the JSON export records it. See
+[`docs/physics_and_methods.md`](docs/physics_and_methods.md) §11 and
+[`docs/viewing_angle_distribution.md`](docs/viewing_angle_distribution.md) §8, §11.
 
 ## Setup
 
@@ -147,7 +159,7 @@ What those cells produce, though, is a small per-source `.pkl` in `data/tmp/`
 `gwuls/simulate.py` — consumes on its own, with no further dependency on the real
 DL3 data or on `gammapy`'s IRF-heavy machinery. That makes the natural split:
 
-1. **On the cluster**: run the early cells of `sim_3d_model_CTAO_paper.ipynb` against
+1. **On the cluster**: run the early cells of `sim_3d_model_CTAO_paper_pe_joint.ipynb` against
    the real DL3 data to (re)build `data/gw_input/*.fits` and the per-source
    `data/tmp/*.pkl`.
 2. **Copy locally** (once, or whenever the inputs change) — see below.
@@ -199,13 +211,15 @@ smaller `N_JOBS`.
 git clone git@github.com:juanjq/gw-gamma-global-uls.git ~/projects/gw-gamma-global-uls
 ```
 
-### Getting the data `sim_3d_model_CTAO_paper.ipynb` needs
+### Getting the data `sim_3d_model_CTAO_paper_pe_joint.ipynb` needs
 
 The notebook only ever reads/writes two directories: `data/gw_input/` (the GW
 skymap `.fits` — already tracked in git — plus the generated distance-CDF
 `.npz` cache) and `data/tmp/` (the per-source dataset `.pkl`, built on the
-cluster from the real DL3 data, plus bisection/cache scratch). Nothing else on
-the cluster is needed to run it locally. From your local machine:
+cluster from the real DL3 data, plus bisection/cache scratch). The emission-model limit also
+reads `data/gw_pe/standardized/<alert>.h5` (tracked in git) and, for `THETA_MODE = "gw"`,
+`data/gw_input/<alert>_theta_distribution.npz` (written by `setup_angle_distribution.ipynb`).
+Nothing else on the cluster is needed to run it locally. From your local machine:
 
 ```bash
 rsync -avz --exclude 'slurm_output/' \

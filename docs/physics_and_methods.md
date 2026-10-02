@@ -80,6 +80,8 @@ Status of each component:
                                               • background only (φ0 = 0): p-value, median Λ
                                               • 2D: φ0 fixed, (RA, Dec) random in M95
                                               • 3D: L0 fixed, (RA, Dec, d) random in the full map
+                                              • 3D, emission model: (RA, Dec, d, θ_v) from one
+                                                PE sample (default), or skymap + an angle option
                                           │
                                          [E] f(x) = P(Λ_x > Λ*), fitted as a probit in log x
                                               to realisations that each have their own x
@@ -88,10 +90,12 @@ Status of each component:
                                          [F] both ULs as flux AND as luminosity,
                                               over the distance posterior → .json
 
-   Prepared for the numerical-model 3D UL, not yet read by [D]:
-     setup_model.ipynb              → L(E', t'; θ) per viewing angle, rest frame
-                                      (data/models/grb_afterglow_inaf/standardized/*.npz)
-     setup_angle_distribution.ipynb → p(d, θ_v) and p(θ_v | d) for one alert
+   Prepared ahead, read by [D] for the emission-model 3D UL (RUN_MODEL_3D):
+     setup_model*.ipynb             → L(E', t'; θ) per viewing angle, rest frame
+                                      (data/models/grb_afterglow_*/…/*.npz)
+     setup_angle_distribution.ipynb → standardized PE samples (RA, Dec, d, θ_v)
+                                      (data/gw_pe/standardized/<alert>.h5), and
+                                      p(d, θ_v), p(θ_v | d) for one alert
                                       (data/gw_input/<alert>_theta_distribution.npz)
 ```
 
@@ -99,7 +103,8 @@ Status of each component:
 
 | File | Role |
 | --- | --- |
-| `notebooks/sim_3d_model_CTAO_paper.ipynb` | Main pipeline. Part 1 prepares data (stages A and B, input `.pkl`, now also the per-run datasets and GTIs); Part 2 runs the simulations (stages D, E and F) for the 2D and 3D limits, and the 3D limit again with the emission model injected (`RUN_MODEL_3D`). |
+| `notebooks/sim_3d_model_CTAO_paper_pe_joint.ipynb` | Main pipeline. Part 1 prepares data (stages A and B, input `.pkl`, now also the per-run datasets and GTIs); Part 2 runs the simulations (stages D, E and F) for the 2D and 3D limits, and the 3D limit again with the emission model injected (`RUN_MODEL_3D`), by default at (sky, $d$, $\theta_v$) drawn together from the PE ([§11](#11-what-is-not-wired-together-yet)). |
+| `notebooks/sim_3d_model_CTAO_paper.ipynb` | Previous version of the main pipeline: the emission-model limit draws sky and distance from the skymap only. Kept for comparison. |
 | `notebooks/setup_model.ipynb` | Run once. Standardises the emission-model files ([§9](#9-the-emission-model-setup_model)). |
 | `notebooks/setup_model_phenomenological.ipynb` | Exploratory, standalone. Implements the Nava (2020)/Abe et al. (2026) stochastic recipe directly (`gwuls/grb_phenomenological.py`) instead of reading the five catO5 files, and cross-checks the two against each other. Not read by any other notebook. |
 | `notebooks/setup_model_phenomenological_fixed.ipynb` | Run once. Builds the deterministic benchmark jet at every angle and writes `data/models/grb_afterglow_phenomenological/benchmark/` (optionally the one-sigma variants), loadable exactly like the catO5 cache. |
@@ -1036,12 +1041,13 @@ about twelve orders of magnitude fainter at peak and peaks days after the merger
 
 ### 10.7 Skymap distance versus PE distance
 
-The planned 3D loop draws $d_i$ from the **alert skymap** (§3.4) and then $\theta_i$ from the **PE**
-conditional. For S240615dg the two distance posteriors disagree: skymap 1421 [1028, 1815] Mpc
-versus PE 1566 [1123, 1849] Mpc. Skymap distances in the near tail pick up the inclined angles of
-that tail, which shifts the $\theta_v$ median by **+8.2°**. When PE samples exist, the guidelines'
-preferred route avoids this by drawing a PE sample index and taking (RA, Dec, $d$, $\theta_v$)
-together (`ThetaDistribution.sample_joint`), which keeps every correlation.
+Drawing $d_i$ from the **alert skymap** (§3.4) and then $\theta_i$ from the **PE** conditional mixes
+two posteriors. For S240615dg they disagree: skymap 1421 [1028, 1815] Mpc versus PE 1566
+[1123, 1849] Mpc. Skymap distances in the near tail pick up the inclined angles of that tail, which
+shifts the $\theta_v$ median by **+8.2°**. When PE samples exist, the guidelines' preferred route
+avoids this by drawing a PE sample and taking (RA, Dec, $d$, $\theta_v$) together, which keeps
+every correlation. That is the default of the emission-model limit
+(`SKY_DISTANCE_MODE = THETA_MODE = "pe"`, §11).
 
 ### 10.8 Storage
 
@@ -1059,46 +1065,68 @@ The 3D limit can now inject the emission model instead of the Γ = 2 power law
 model"). The model is the fixed phenomenological benchmark jet of
 `setup_model_phenomenological_fixed.ipynb` (`data/models/grb_afterglow_phenomenological/benchmark/`,
 1° grid in $\theta_v$, read with `get_model(θ, "interp", align_peaks=False)`). Per realisation:
-$(b, d)$ from the skymap as before (same draws for the same seed), then a viewing angle $\theta_i$
-(by default $\theta_i \sim p(\theta_v \mid d_i)$; see Step 4.3 below), the model at $\theta_i$, and for each run $j$ the observer-frame
+a sky bin $b$, a distance $d_i$ and a viewing angle $\theta_i$ (by default all three from one PE
+sample; see Steps 4.1–4.3 below), the model at $\theta_i$, and for each run $j$ the observer-frame
 spectrum averaged over that run's GTIs (time since the merger), with EBL at $z_i$. It is folded through
 run $j$'s own exposure, PSF and energy dispersion, and the runs are summed into the stacked dataset
 the TS engine analyses. How the guidelines' steps map onto it:
 
-- **Step 4.3, the viewing angle (`THETA_MODE` in the notebook).** `EmissionModelInjection.theta_distribution`
-  takes a saved `ThetaDistribution` cache or one of the built-in specs, all resolved by
-  `simulate.resolve_theta_distribution`. The angle uses its own random stream, so the sky and
-  distance draws do not change with the choice:
+- **Steps 4.1–4.3, sky position, distance and viewing angle (`SKY_DISTANCE_MODE` and `THETA_MODE` in
+  the notebook).** `simulate.sample_injections_3d` draws all three, the same function in production
+  and in the notebook's checks. `EmissionModelInjection.sky_distance` says where (sky, $d_i$) come
+  from, and `theta_distribution` where $\theta_i$ comes from (a built-in spec or a saved
+  `ThetaDistribution` cache, resolved by `simulate.resolve_theta_distribution`):
+
+  | `SKY_DISTANCE_MODE` | (sky, $d_i$) |
+  | --- | --- |
+  | `"pe"` (default) | one PE posterior sample per realisation (`PE_SOURCE`, `data/gw_pe/standardized/<alert>.h5`), via `simulate.sample_sky_distance_angle_pe`. Samples outside the analysis geometry (or the 95% mask with `restrict_to_mask_3d`) are dropped, which conditions the posterior on the sky support as the skymap route does by renormalising `prob_gw` over the map. The source is injected at the centre of the bin its position falls in. |
+  | `"skymap"` | a skymap bin, then $d_i$ from its distance ansatz (§3.4): the same draws as the power-law 3D limit for the same seed |
 
   | `THETA_MODE` | spec passed | $\theta_i$ | depends on $d_i$? | what the limit means |
   | --- | --- | --- | --- | --- |
-  | `"gw"` (default) | `data/gw_input/<alert>_theta_distribution.npz` | $p(\theta_v\mid d_i)$ of the alert (PE, §10) | yes | the limit for this event, marginalised over its measured inclination |
+  | `"pe"` (default) | `"pe"` | the angle of the same PE sample as (sky, $d_i$) | yes, exactly | the limit for this event, marginalised over its joint posterior $p(\Omega, d, \theta_v\mid\mathrm{data})$; needs `SKY_DISTANCE_MODE = "pe"` |
+  | `"gw"` | `data/gw_input/<alert>_theta_distribution.npz` | $p(\theta_v\mid d_i)$ of the alert (PE KDE, §10) | yes, sky-averaged | the previous default; with `"skymap"` distances it carries the bias of §10.7 |
   | `"fixed"` | `"fixed:<deg>"` (`THETA_FIXED_DEG`) | that angle | no | the benchmark jet seen at that angle |
   | `"isotropic"` | `"isotropic"` | $\sin\theta_v$, i.e. uniform in $\cos\theta_v$ | no | random orientation, no GW information |
   | `"schutz"` | `"schutz"` | Schutz (2011), §10.6 | no | a typical GW-*detected* source, no event information |
+  | `"two_bin"` | `"two_bin:<deg>:<p>"` (`THETA_TWO_BIN`) | uniform below and above the threshold, with mass $p$ below | no | a dummy placeholder, no claim about the shape |
+  | `"selection"` | `"selection:<Mpc>"` (`THETA_HORIZON_MPC`) | detected population with that horizon, given $d_i$ | yes, population-level | GW selection without event information |
 
-  **Which one is the standard case.** For an event-specific limit, `"gw"`. The GW data measure the
-  inclination together with the distance, so $p(\theta_v\mid d)$ is the posterior, and conditioning
-  on the same $d_i$ keeps the distance–inclination correlation (§10.3). `"isotropic"` is the prior
-  before the detection. It ignores that measurement and the selection of GW detectors toward face-on
-  systems (median 60°, against 24.7° for the S240615dg PE and 36° for Schutz, §10.6), and pairs a
-  GW-informed distance with a GW-blind angle. It is a conservative bracket, not the standard case.
-  "Homogeneous" means uniform on the sphere (in $\cos\theta_v$), not uniform in $\theta_v$.
-  `"fixed"` is the companion presentation: a limit that does not depend on the GW inclination,
-  quoted at a few angles (e.g. 0°, $\theta_\mathrm{core}$ = 14°, 30°, 45°) as a curve against
-  $\theta_v$. `"schutz"` is the population fallback for alerts without PE.
+  With `"skymap"` the angle uses its own random stream, so the sky and distance draws do not change
+  with `THETA_MODE`. With `"pe"`, any `THETA_MODE` other than `"pe"` draws the angle given the PE
+  distance.
+
+  **Which one is the standard case.** For an event-specific limit with released PE, `"pe"` and
+  `"pe"`. The GW data measure the inclination together with the distance and the sky position, and
+  one PE sample carries all three, so the draw is the posterior itself: no density estimate, and
+  neither the skymap–PE distance mismatch (§10.7, +8° for S240615dg) nor the sky dependence of
+  $p(\theta_v\mid d)$ ([`viewing_angle_distribution.md`](viewing_angle_distribution.md) §8.1) can
+  enter. `"isotropic"` is the prior before the detection. It ignores that measurement and the
+  selection of GW detectors toward face-on systems (median 60°, against 24.7° for the S240615dg PE
+  and 36° for Schutz, §10.6), and pairs a GW-informed distance with a GW-blind angle. It is a
+  conservative bracket, not the standard case. "Homogeneous" means uniform on the sphere (in
+  $\cos\theta_v$), not uniform in $\theta_v$. `"fixed"` is the companion presentation: a limit that
+  does not depend on the GW inclination, quoted at a few angles (e.g. 0°, $\theta_\mathrm{core}$ =
+  14°, 30°, 45°) as a curve against $\theta_v$. Without released PE only `"skymap"` is available;
+  `"schutz"` or `"selection"` are then the population fallbacks.
+
+  The test statistic does not change with these options: $\Lambda$ always weights by the skymap
+  $p_{\rm GW}$ the real data were analysed with. With `"pe"` the model limit and the power-law limit
+  no longer share their sky and distance draws, so their ratio also carries the difference between
+  the two distance posteriors.
 
   How much the choice matters depends on the normalisation. With `"gti_mean"` the angle reaches the
   limit only through the light-curve shape across the runs: for three synthetic 20-min runs at
   2–4 h (no EBL), the median injected 1 TeV flux per unit $L_k$ changes by a factor of about 3.5
   between 0° and 45°.
   With `"anchor"`, it changes by about six orders of magnitude between the same two angles. The
-  isotropic and `"gw"` medians then differ by seven orders of magnitude, so the choice must be quoted
-  with the limit.
+  isotropic and event-specific medians then differ by seven orders of magnitude, so the choice must
+  be quoted with the limit.
 
-  Every cache name of the model limit carries the choice (`_thetafixed20`, `_thetaisotropic`, …;
-  none for `"gw"`, whose names are unchanged), and the JSON export records `theta_mode_3d_model`
-  and `theta_spec_3d_model`.
+  Every cache name of the model limit carries the choice (`_skype_thetape`,
+  `_skyskymap_thetafixed-20`, …) and the modification time of the PE or $p(\theta_v\mid d)$ file it
+  reads, and the JSON export records `sky_distance_3d_model`, `theta_mode_3d_model` and
+  `theta_spec_3d_model`.
 - **Step 3, rest-frame band.** `band_rest_TeV`, by default the analysis band taken in the rest frame.
   The phenomenological spectra are exact power laws, so evaluating them outside the tabulated
   1 GeV–10 TeV is exact. For the catO5 files it would be an extrapolation.
@@ -1160,7 +1188,8 @@ Still open:
 | Three sampling routes reproduce the posterior (quantiles, correlation, KS) | Part 1 | sampler bugs | KS ≤ 0.016 |
 | Each option's sampler vs its own pdf | Part 2 | sampler bugs | at $1/\sqrt n$ level |
 | Schutz vs Monte-Carlo selection model | Part 2 | a wrong closed form | max CDF difference 0.009 |
-| `resolve_theta_distribution` for every `THETA_MODE`; malformed `"fixed:…"` rejected at construction | §11, Step 4.3 | a silently wrong angle draw | medians: fixed 20°, isotropic 60.2°, Schutz 36.4°, S240615dg PE given $d$ = 1400 Mpc 33.9° |
+| `resolve_theta_distribution` for every `THETA_MODE`; malformed `"fixed:…"`, `"two_bin:…"`, `"selection:…"` and `THETA_MODE = "pe"` without PE sky/distance rejected at construction | §11, Step 4.3 | a silently wrong angle draw | medians: fixed 20°, isotropic 60.2°, Schutz 36.4°, S240615dg PE given $d$ = 1400 Mpc 33.9° |
+| Joint PE draw: bin of every sample vs nearest bin centre; drawn $d$, $\theta_v$ and corr$(d, \cos\theta_v)$ vs the PE samples in the sky support; skymap route alongside | `sample_sky_distance_angle_pe`; notebook crosscheck (4) | a wrong bin, a biased resampling | S240615dg: 98.4% of samples in the geometry, all within half a bin diagonal of their bin centre; KS 0.004 ($d$), 0.005 ($\theta_v$); corr 0.825 vs 0.823; skymap route +8° in the $\theta_v$ median |
 
 ---
 

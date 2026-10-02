@@ -41,12 +41,18 @@ iteration $i$ it draws one possible source and simulates its IACT observation
 
 ```mermaid
 flowchart LR
+  P["one PE sample<br/>(RA_i, Dec_i, d_i, θ_i)<br/>default, with PE"] --> D
   A["sky pixel<br/>(RA_i, Dec_i)"] --> B["distance d_i<br/>(skymap, per pixel)"]
-  B --> C["viewing angle θ_i<br/>drawn from p(θ | d_i)"]
+  B --> C["viewing angle θ_i<br/>p(θ | d_i), fixed or a prior"]
   C --> D["model file at θ_i<br/>(Step 5)"]
   D --> E["normalise to L_k,<br/>flux at d_i, z_i, EBL"]
   E --> F["simulated observation<br/>→ TS_i"]
 ```
+
+With released PE, the main notebook
+([`sim_3d_model_CTAO_paper_pe_joint.ipynb`](../notebooks/sim_3d_model_CTAO_paper_pe_joint.ipynb))
+takes all four values from one posterior sample (top path; Section 11). The lower path is the
+skymap route, used without PE or on request.
 
 The angle only enters through the **shape** of the emission model. The model is rescaled to
 the trial luminosity $L_k$, but a larger viewing angle delays the light-curve peak and softens
@@ -57,7 +63,8 @@ curves the upper limit is built from.
 The notebook answers one question per alert: *what is $p(\theta_\mathrm{v} \mid d)$ for this
 alert, given whatever LVK has released?* It writes the answer to
 `data/gw_input/<alert>_theta_distribution.npz`. `sim_3d` loads that file with one call and
-never needs to know which case produced it.
+never needs to know which case produced it. With PE, its Part 0 also writes the standardized
+samples (`data/gw_pe/standardized/<alert>.h5`) that the default joint draw reads directly.
 
 ---
 
@@ -442,10 +449,10 @@ The skymap route draws a $\theta_\mathrm{v}$ median of **32.6°** instead of 24.
 distance support.
 
 **Recommendation:** when an alert has released PE, draw sky position, distance and angle
-**together** from the PE samples (`sample_joint`, the guidelines' "best option"). This
-replaces Steps 4.1–4.3. Use $p(\theta \mid d_i)$ with skymap distances only when the two
-distance posteriors agree. The notebook prints this recommendation whenever the shift
-exceeds 2°.
+**together** from the PE samples (the guidelines' "best option"). This replaces Steps 4.1–4.3,
+and it is the default of the upper-limit simulation (`SKY_DISTANCE_MODE = THETA_MODE = "pe"`,
+Section 11). Use $p(\theta \mid d_i)$ with skymap distances only when the two distance
+posteriors agree. The notebook prints this recommendation whenever the shift exceeds 2°.
 
 ### 8.1 The second shortcut: one $p(\theta \mid d)$ for the whole sky
 
@@ -527,7 +534,7 @@ $\Omega$ and $d$ from the same posterior and $\theta$ from $p(\theta \mid d)$ re
 $\theta$ marginal (route 2 of Section 7.4). It is biased **region by region**. That
 matters because the IACT only covers part of the localisation. What enters the limit is
 $\theta$ in the observed pixels, and for a broad localisation that can be off by several
-degrees. With PE, `sample_joint` removes the issue. To see the size of the effect for a
+degrees. With PE, the joint draw (`sample_joint`, or `THETA_MODE = "pe"` in the simulation) removes the issue. To see the size of the effect for a
 specific observation, pass `regions` = inside/outside the pointings to
 `sky_dependence_check`. Without PE no per-pixel information on $\theta$ exists (the public
 skymap carries none). A sky-dependent selection model, with
@@ -747,6 +754,22 @@ draw = theta_dist.sample_joint(N, rng=rng)   # ra_deg, dec_deg, distance_Mpc, th
 d, p_d = theta_dist.joint.conditional_distance(theta_deg=20.0)   # or theta_range=(0, 10)
 ```
 
+In the upper-limit simulation
+([`sim_3d_model_CTAO_paper_pe_joint.ipynb`](../notebooks/sim_3d_model_CTAO_paper_pe_joint.ipynb))
+two independent options of `simulate.EmissionModelInjection` set the draw, and
+`simulate.sample_injections_3d` performs it:
+
+| notebook option | `EmissionModelInjection` | values |
+| --- | --- | --- |
+| `SKY_DISTANCE_MODE` | `sky_distance`, `pe_source` | `"pe"` (default): (RA, Dec, $d$) of one PE sample per realisation (`simulate.sample_sky_distance_angle_pe`), from the standardized file; `"skymap"`: a skymap bin and $d_i$ from its distance ansatz |
+| `THETA_MODE` | `theta_distribution` | `"pe"` (default): $\theta$ of the same PE sample, the exact joint (needs `"pe"` above); `"gw"`: $p(\theta \mid d_i)$ from this notebook's cache; `"fixed"`, `"isotropic"`, `"schutz"`, `"two_bin"`, `"selection"`: Section 9 |
+
+With `SKY_DISTANCE_MODE = "pe"`, PE samples outside the analysis geometry (or the 95% mask) are
+dropped, which conditions the posterior on the sky support, and the source is injected at the
+centre of the bin its sample falls in. The two options combine freely, except that
+`THETA_MODE = "pe"` needs PE sky positions and distances. The notebook's crosscheck (4) compares
+the production draw with the PE samples and with the skymap route.
+
 A new alert with released PE: put its `*-combined_PEDataRelease.hdf5` (and the catalog's
 `*-PESummaryTable.hdf5`) in `data/gw_pe/raw/`, set `source_name` to the superevent ID, and
 run the notebook. Part 0 standardizes the file and updates `index.csv`. Commit
@@ -764,11 +787,12 @@ run the notebook. Part 0 standardizes the file and updates `index.csv`. Commit
 - **KDE tails.** Conditionals at angles or distances deep in the tails rest on few samples.
   The notebook flags $P(\theta < \theta_0)$ next to every $p(d \mid \theta_0)$. Distances
   outside the support are clamped and counted.
-- **Skymap vs PE distance.** Mixing the two biases the angle (Section 8). Prefer
-  `sample_joint` for alerts with PE.
+- **Skymap vs PE distance.** Mixing the two biases the angle (Section 8). The simulation's
+  default joint draw (`THETA_MODE = "pe"`) avoids it for alerts with PE.
 - **One $p(\theta \mid d)$ for the whole sky.** The saved grid is sky-marginalised. Its
   per-region bias is negligible for a well-localised event (≤ 0.6° for S240615dg) but
-  reaches ±6° for a broad one (S241125n) (Section 8.1). `sample_joint` avoids it.
+  reaches ±6° for a broad one (S241125n) (Section 8.1). The joint draw avoids it;
+  `THETA_MODE = "gw"` with PE distances does not.
 - **Selection model.** It uses a single-detector antenna pattern averaged over sky and
   polarisation, and a sharp SNR threshold. It needs a horizon $D_h$ appropriate to the source
   type and network. 3000 Mpc is illustrative. Its marginal agrees with Schutz to within 0.009
@@ -776,8 +800,11 @@ run the notebook. Part 0 standardizes the file and updates `index.csv`. Commit
 - **Model file coverage.** No file lies between 28.6° and 77.8°, so the treatment of that
   gap (nearest vs stochastic vs interpolation) matters for the prior-driven options
   (Section 10).
-- **Not yet wired into `sim_3d`.** The loader and the three calls above are ready; the
-  numerical-model version of `sim_3d` still has to call them.
+- **Power-law 3D limit still uses the skymap.** Only the emission-model limit can draw from the
+  PE (`SKY_DISTANCE_MODE = "pe"`). The power-law $L_0$ limit draws (sky, $d$) from the skymap, so
+  the two limits then no longer share their sky and distance draws.
+- **Test statistic.** $\Lambda$ still weights by the skymap $p_\mathrm{GW}$ the data were analysed
+  with; only the injected population follows the PE.
 
 ---
 

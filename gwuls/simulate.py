@@ -132,9 +132,10 @@ __all__ = [
     "load_simulation_input", "validate_simulation_input",
     # Sections 4-5 -- simulations
     "perform_n_simulations", "perform_n_simulations_3d",
-    "sample_sky_and_distance", "check_3d_sampling",
+    "sample_sky_and_distance", "sample_sky_distance_angle_pe", "check_3d_sampling",
     # Section 5b -- 3D simulation with an emission model
-    "EmissionModelInjection", "gti_seconds_since", "emission_model_run_spectra",
+    "EmissionModelInjection", "resolve_theta_distribution", "pe_injection_samples",
+    "sample_injections_3d", "gti_seconds_since", "emission_model_run_spectra",
     # Section 6-7 -- upper limits and reporting
     "run_fit_ul", "run_fit_ul_3d", "closure_pull",
     "run_iterative_ul", "run_iterative_ul_3d", "geometric_n_sim_schedule",
@@ -1278,6 +1279,48 @@ def sample_sky_and_distance(prob_gw, cdf_valid, cdf_table, r_grid,
     }
 
 
+def sample_sky_distance_angle_pe(samples, geom, bin_c_ra, bin_c_dec, n_sim, rng,
+                                 sky_mask=None):
+    """
+    The joint draw: (sky, distance, viewing angle) taken *together* from one PE
+    posterior sample per realisation, which is an exact draw from
+    p(Omega, d, theta_v | data). It replaces `sample_sky_and_distance` followed by
+    theta ~ p(theta | d), which pairs the skymap's distances with the PE's
+    distance-angle relation and ignores the sky dependence of p(theta | d)
+    (docs/viewing_angle_distribution.md, Section 8).
+
+    samples : dict with "ra_deg", "dec_deg", "distance_Mpc", "theta_deg", equal
+        weight (`ThetaDistribution.samples` of a kind "pe" distribution).
+    geom : the analysis WcsGeom; samples outside it are dropped, and so are those
+        outside `sky_mask` if given. Resampling the rest uniformly is the joint
+        posterior conditioned on the sky support, the same conditioning the
+        skymap route applies when it renormalises prob_gw over the map.
+
+    Sources are injected at the centre of the bin each sample falls in, as in the
+    skymap route. `n_pe_support` is how many distinct samples the draws reuse.
+    """
+    ra = np.asarray(samples["ra_deg"], dtype=float)
+    dec = np.asarray(samples["dec_deg"], dtype=float)
+    ix, iy = (np.asarray(i, dtype=int) for i in geom.to_image().coord_to_idx(
+        SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")))
+    inside = (ix >= 0) & (iy >= 0)
+    if sky_mask is not None:
+        inside[inside] = np.asarray(sky_mask, dtype=bool)[iy[inside], ix[inside]]
+    support = np.flatnonzero(inside)
+    if support.size == 0:
+        raise ValueError("No PE sample falls inside the analysis geometry"
+                         + (" and the sky mask." if sky_mask is not None else "."))
+    k = support[rng.integers(0, support.size, int(n_sim))]
+    return {
+        "iy": iy[k], "ix": ix[k],
+        "d_sim": np.asarray(samples["distance_Mpc"], dtype=float)[k],
+        "theta_sim": np.asarray(samples["theta_deg"], dtype=float)[k],
+        "ra": bin_c_ra[iy[k], ix[k]], "dec": bin_c_dec[iy[k], ix[k]],
+        "ra_pe": ra[k], "dec_pe": dec[k], "pe_index": k,
+        "n_pe_support": int(support.size), "frac_pe_support": float(inside.mean()),
+    }
+
+
 # ===========================================================================
 # 5b. 3D simulation with an emission model (guidelines Steps 4.3, 6 and 7)
 # ===========================================================================
@@ -1286,8 +1329,10 @@ def sample_sky_and_distance(prob_gw, cdf_valid, cdf_table, r_grid,
 # L(E', t'; theta) (gwuls.grb_model.GRBModelSet, e.g. the fixed phenomenological
 # benchmark of setup_model_phenomenological_fixed.ipynb):
 #
-#   * theta_i ~ p(theta | d_i) from the alert's viewing-angle distribution, or a
-#     fixed angle, or an isotropic / Schutz prior (`resolve_theta_distribution`),
+#   * (sky, d_i, theta_i) from `sample_injections_3d`: (sky, d_i) from the skymap
+#     or from one PE sample; theta_i the angle of that same PE sample (the exact
+#     joint), or ~ p(theta | d_i) from the alert's viewing-angle distribution, or a
+#     fixed angle, or a prior / dummy distribution (`resolve_theta_distribution`),
 #   * the model at theta_i, projected to (d_i, z_i) with EBL (Step 7),
 #   * averaged over each run's own GTIs, in time since the merger, and injected
 #     through that run's own exposure, PSF and energy dispersion, then summed
@@ -1312,12 +1357,27 @@ class EmissionModelInjection:
         e.g. paths.GRB_MODEL_PHENOMENOLOGICAL_DIR / "benchmark".
     theta_distribution : where theta_i comes from, per realisation (see
         `resolve_theta_distribution`):
+        "pe"          -- the viewing angle of the same PE sample as (sky, d_i): the
+            exact joint posterior. Needs sky_distance="pe";
         a path of an `angle_distribution.ThetaDistribution` cache
             (setup_angle_distribution.ipynb), e.g. the alert's own, so that
             theta_i ~ p(theta | d_i);
         "fixed:<deg>" -- every realisation at that angle;
         "isotropic"   -- p(theta) = sin(theta), random orientation, no GW information;
-        "schutz"      -- orientations of GW-detected sources (Schutz 2011).
+        "schutz"      -- orientations of GW-detected sources (Schutz 2011);
+        "two_bin[:<threshold deg>[:<p_below>]]" -- dummy split, uniform below and above
+            the threshold (default 45 deg, 50%);
+        "selection:<horizon Mpc>" -- detected population with that horizon,
+            theta_i ~ p(theta | d_i).
+    sky_distance : where (sky position, d_i) come from.
+        "skymap" (default): a sky bin from the alert skymap, then d_i from that
+            bin's distance ansatz. The same draws as the power-law 3D limit for the
+            same `sampling_seed`.
+        "pe": one PE posterior sample per realisation (`sample_sky_distance_angle_pe`),
+            from `pe_source`. With theta_distribution="pe" its viewing angle is used
+            too; with any other spec theta_i is drawn given the PE d_i.
+    pe_source : superevent ID or path of a standardized PE file (gwuls.gw_pe.load_pe),
+        for sky_distance="pe".
     normalisation : what the trial luminosity L_k is.
         "gti_mean" (guidelines Step 6): the isotropic-equivalent luminosity in the
             rest-frame band `band_rest_TeV`, averaged over the observation's GTIs,
@@ -1340,6 +1400,8 @@ class EmissionModelInjection:
     """
     model_dir: str
     theta_distribution: str
+    sky_distance: str = "skymap"
+    pe_source: Optional[str] = None
     normalisation: str = "gti_mean"
     band_rest_TeV: Optional[Tuple[float, float]] = None
     anchor_time_s: float = 11.0 * 3600.0
@@ -1350,6 +1412,14 @@ class EmissionModelInjection:
     n_time_per_gti: int = 16
 
     def __post_init__(self):
+        if self.sky_distance not in ("skymap", "pe"):
+            raise ValueError(f"sky_distance must be 'skymap' or 'pe', got {self.sky_distance!r}")
+        if self.sky_distance == "pe" and not self.pe_source:
+            raise ValueError("sky_distance='pe' needs pe_source (a superevent ID or a "
+                             "standardized PE file)")
+        if _theta_from_pe(self.theta_distribution) and self.sky_distance != "pe":
+            raise ValueError("theta_distribution='pe' takes the angle of the PE sample that "
+                             "gave (sky, d): it needs sky_distance='pe'")
         if self.normalisation not in ("gti_mean", "anchor"):
             raise ValueError(f"normalisation must be 'gti_mean' or 'anchor', "
                              f"got {self.normalisation!r}")
@@ -1368,34 +1438,120 @@ class EmissionModelInjection:
                 f"rest-frame {lo:g}-{hi:g} TeV")
 
 
+def _theta_from_pe(spec):
+    """True for the theta spec "pe": the angle of the same PE sample as (sky, d)."""
+    return str(spec).strip().lower() == "pe"
+
+
 def _parse_theta_spec(spec):
     """(mode, kwargs) of `angle_distribution.make_theta_distribution` for the
-    built-in theta specs "isotropic", "schutz" and "fixed:<deg>"; None for
-    anything else, which is then read as the path of a saved cache."""
+    built-in theta specs "isotropic", "schutz", "fixed:<deg>",
+    "two_bin[:<threshold deg>[:<p_below>]]" and "selection:<horizon Mpc>"; None
+    for "pe" and for anything else, which is then read as the path of a saved
+    cache."""
     s = str(spec).strip().lower()
     if s in ("isotropic", "schutz"):
         return s, {}
-    if s.startswith("fixed:"):
-        try:
-            theta = float(s.split(":", 1)[1])
-        except ValueError:
-            raise ValueError(f"theta spec {spec!r}: expected 'fixed:<deg>', e.g. 'fixed:20'") from None
-        if not 0.0 <= theta <= 90.0:
+    mode, _, rest = s.partition(":")
+    if mode not in ("fixed", "two_bin", "selection"):
+        return None
+    usage = {"fixed": "'fixed:<deg>', e.g. 'fixed:20'",
+             "two_bin": "'two_bin', 'two_bin:<threshold deg>' or 'two_bin:<threshold deg>:<p_below>'",
+             "selection": "'selection:<horizon Mpc>', e.g. 'selection:3000'"}[mode]
+    try:
+        values = [float(v) for v in rest.split(":")] if rest else []
+    except ValueError:
+        raise ValueError(f"theta spec {spec!r}: expected {usage}") from None
+    if mode == "fixed" and len(values) == 1:
+        if not 0.0 <= values[0] <= 90.0:
             raise ValueError(f"theta spec {spec!r}: the viewing angle must be in [0, 90] deg")
-        return "fixed", {"theta_deg": theta}
-    return None
+        return "fixed", {"theta_deg": values[0]}
+    if mode == "two_bin" and len(values) <= 2:
+        kwargs = dict(zip(("threshold_deg", "p_below"), values))
+        if not 0.0 < kwargs.get("threshold_deg", 45.0) < 90.0:
+            raise ValueError(f"theta spec {spec!r}: the threshold must be in (0, 90) deg")
+        if not 0.0 <= kwargs.get("p_below", 0.5) <= 1.0:
+            raise ValueError(f"theta spec {spec!r}: p_below must be in [0, 1]")
+        return "two_bin", kwargs
+    if mode == "selection" and len(values) == 1:
+        if values[0] <= 0:
+            raise ValueError(f"theta spec {spec!r}: the horizon must be > 0 Mpc")
+        return "selection", {"horizon_Mpc": values[0]}
+    raise ValueError(f"theta spec {spec!r}: expected {usage}")
 
 
 def resolve_theta_distribution(spec):
     """The `angle_distribution.ThetaDistribution` an `EmissionModelInjection`
-    draws theta from: built for "isotropic", "schutz" or "fixed:<deg>", loaded
-    from disk for a path (e.g. paths.theta_distribution_path(source_name))."""
+    draws theta from: built for the specs of `_parse_theta_spec`, loaded from disk
+    for a path (e.g. paths.theta_distribution_path(source_name)). "pe" has no
+    distribution of its own: the angle comes with the PE sample."""
     from .angle_distribution import load_theta_distribution, make_theta_distribution
 
+    if _theta_from_pe(spec):
+        raise ValueError("theta spec 'pe' is the angle of each drawn PE sample, not a "
+                         "distribution; see sample_injections_3d")
     parsed = _parse_theta_spec(spec)
     if parsed is None:
         return load_theta_distribution(spec)
     return make_theta_distribution(parsed[0], **parsed[1])
+
+
+def pe_injection_samples(pe_source):
+    """The PE posterior samples `sample_sky_distance_angle_pe` draws from, as a dict
+    of equal-weight arrays: ra_deg, dec_deg, distance_Mpc and theta_deg (the
+    folded jet viewing angle). `pe_source` is a superevent ID or the path of a
+    standardized PE file (gwuls.gw_pe.load_pe)."""
+    from .gw_pe import load_pe
+
+    pe = load_pe(pe_source)
+    return {"ra_deg": pe.get("ra_deg"), "dec_deg": pe.get("dec_deg"),
+            "distance_Mpc": pe.get("distance_Mpc"), "theta_deg": pe.get("viewing_angle_deg")}
+
+
+def sample_injections_3d(config, prob_gw, cdf_valid, cdf_table, r_grid, geom,
+                         bin_c_ra, bin_c_dec, n_sim, sampling_seed, sky_mask=None,
+                         verbose=False):
+    """
+    (sky bin, d, theta_v) of every realisation of the emission-model 3D limit, as
+    `perform_n_simulations_3d` draws them. Public so the notebook can validate the
+    production sampler itself.
+
+    (sky, d) come from `config.sky_distance` with rng(sampling_seed): the skymap
+    (`sample_sky_and_distance`) or one PE sample (`sample_sky_distance_angle_pe`).
+    theta comes from `config.theta_distribution`: the same PE sample for "pe",
+    otherwise a draw given d with its own rng([sampling_seed, 1]), so that the
+    skymap (sky, d) draws stay those of the power-law 3D limit. Warnings of the
+    theta draw (e.g. distances outside a p(theta | d) support) are collected in
+    "notes" rather than raised.
+    """
+    rng = np.random.default_rng(sampling_seed)
+    if config.sky_distance == "pe":
+        samples = pe_injection_samples(config.pe_source)
+        draw = sample_sky_distance_angle_pe(samples, geom, bin_c_ra, bin_c_dec, n_sim, rng,
+                                            sky_mask=sky_mask)
+        if verbose:
+            print(f"  (sky, d) from PE samples ({config.pe_source}): {draw['n_pe_support']} of "
+                  f"{samples['distance_Mpc'].size} ({draw['frac_pe_support']:.1%}) inside the "
+                  f"{'sky mask' if sky_mask is not None else 'analysis geometry'}")
+        if draw["n_pe_support"] < min(n_sim, 1000):
+            warnings.warn(f"only {draw['n_pe_support']} distinct PE samples inside the sky "
+                          f"support; the {n_sim} realisations reuse them heavily.", stacklevel=2)
+    else:
+        draw = sample_sky_and_distance(prob_gw, cdf_valid, cdf_table, r_grid,
+                                       bin_c_ra, bin_c_dec, n_sim, rng, sky_mask=sky_mask)
+
+    if _theta_from_pe(config.theta_distribution):
+        draw["notes"] = []
+        return draw                       # theta_sim is the PE sample's own angle
+    rng_theta = np.random.default_rng(
+        None if sampling_seed is None else [*np.atleast_1d(sampling_seed).astype(int).tolist(), 1])
+    theta_dist = resolve_theta_distribution(config.theta_distribution)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        draw["theta_sim"] = np.asarray(
+            theta_dist.sample(int(n_sim), distance_Mpc=draw["d_sim"], rng=rng_theta), float)
+    draw["notes"] = [str(w.message) for w in caught]
+    return draw
 
 
 def gti_seconds_since(gti, t0):
@@ -1539,12 +1695,16 @@ def perform_n_simulations_3d(
     PWL amplitude, inject, and record Lambda.
 
     emission_model : None (default: the power law above), or an
-        `EmissionModelInjection`. Then each realisation also draws theta_i (from
-        `emission_model.theta_distribution`: p(theta | d_i), fixed or a prior) and injects the emission model instead, run by run (Section 5b), with
-        L0 read as `emission_model.normalisation` says. The (sky, distance) draws are
-        the same as without it, for the same `sampling_seed`; theta uses its own
-        stream. `spectral_index`, `luminosity_band` and `apply_k_correction` are then
-        unused, and the input .pkl must also hold `datasets_runs` and `run_gti_s`.
+        `EmissionModelInjection`. Then each realisation draws (sky, d_i, theta_i) with
+        `sample_injections_3d`: (sky, d) from the skymap or from the PE samples
+        (`emission_model.sky_distance`), theta from `emission_model.theta_distribution`
+        (the same PE sample, p(theta | d_i), a fixed angle or a prior), and injects the
+        emission model instead, run by run (Section 5b), with L0 read as
+        `emission_model.normalisation` says. With sky_distance="skymap" the (sky,
+        distance) draws are the same as without it, for the same `sampling_seed`;
+        theta uses its own stream. `spectral_index`, `luminosity_band` and
+        `apply_k_correction` are then unused, and the input .pkl must also hold
+        `datasets_runs` and `run_gti_s`.
 
     luminosity : float or (n_sim,) array
         L0 in erg/s, defined over `luminosity_band` (default: the analysis
@@ -1609,11 +1769,17 @@ def perform_n_simulations_3d(
               f"{emission_model.model_dir}\n  {emission_model.describe(data['energy_edges'])} "
               f"{lum_desc.split(' ', 1)[1]} erg/s...")
 
-    rng = np.random.default_rng(sampling_seed)
-    draw = sample_sky_and_distance(
-        np.asarray(data["prob_gw"], dtype=float), cdf_valid, cdf_table, r_grid,
-        engine.bin_c_ra, engine.bin_c_dec, n_sim, rng,
-        sky_mask=engine.mask if restrict_to_mask else None)
+    sky_mask = engine.mask if restrict_to_mask else None
+    if emission_model is None:
+        draw = sample_sky_and_distance(
+            np.asarray(data["prob_gw"], dtype=float), cdf_valid, cdf_table, r_grid,
+            engine.bin_c_ra, engine.bin_c_dec, n_sim, np.random.default_rng(sampling_seed),
+            sky_mask=sky_mask)
+    else:
+        draw = sample_injections_3d(
+            emission_model, np.asarray(data["prob_gw"], dtype=float), cdf_valid, cdf_table,
+            r_grid, data["dataset"].geoms["geom"], engine.bin_c_ra, engine.bin_c_dec, n_sim,
+            sampling_seed, sky_mask=sky_mask, verbose=verbose)
     if verbose and restrict_to_mask:
         print("  Sky support restricted to mask_threshold_95 (matches the 2D method)")
 
@@ -1677,20 +1843,12 @@ def _perform_3d_model(data, engine, draw, n_sim, luminosity, file_input, file_ou
                       compute_uls, seed, sampling_seed, restrict_to_mask, store_ts_maps,
                       store_stats, n_jobs, verbose, config):
     """The emission-model branch of `perform_n_simulations_3d`, from the (sky,
-    distance) draws on: theta, the per-run spectra, the realisations, the output."""
+    distance, theta) draws on: the per-run spectra, the realisations, the output."""
     from .grb_model import GRBModelSet
 
     model_set = GRBModelSet.load(config.model_dir)
-    theta_dist = resolve_theta_distribution(config.theta_distribution)
-    d_sim = draw["d_sim"]
+    d_sim, theta_sim = draw["d_sim"], np.asarray(draw["theta_sim"], float)
     z_sim = np.atleast_1d(redshift_from_luminosity_distance(d_sim * u.Mpc))
-    # theta has its own stream, so the (sky, distance) draws stay those of the
-    # power-law path with the same sampling_seed (common random numbers across methods)
-    rng_theta = np.random.default_rng(
-        None if sampling_seed is None else [*np.atleast_1d(sampling_seed).astype(int).tolist(), 1])
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        theta_sim = np.asarray(theta_dist.sample(n_sim, distance_Mpc=d_sim, rng=rng_theta), float)
 
     e_true = data["datasets_runs"][0].geoms["geom_exposure"].axes["energy_true"].edges.to_value(u.TeV)
     energy_obs_TeV = np.geomspace(e_true[0], e_true[-1], 10 * int(np.ceil(np.log10(e_true[-1] / e_true[0]))) + 1)
@@ -1700,8 +1858,8 @@ def _perform_3d_model(data, engine, draw, n_sim, luminosity, file_input, file_ou
     spectra = np.reshape(luminosity, (-1, 1, 1)) * unit_spectra      # one L per realisation
 
     if verbose:
-        for w in caught:
-            print(f"  NOTE (theta draw): {w.message}")
+        for note in draw["notes"]:
+            print(f"  NOTE (theta draw): {note}")
         q = lambda x: np.percentile(x, [5, 50, 95])
         print(f"  Sampled d: median {np.median(d_sim):.0f} Mpc, 90% CI "
               f"[{np.percentile(d_sim, 5):.0f}, {np.percentile(d_sim, 95):.0f}] Mpc; "
@@ -1734,6 +1892,7 @@ def _perform_3d_model(data, engine, draw, n_sim, luminosity, file_input, file_ou
         "luminosity": np.asarray(luminosity, dtype=float),
         "restrict_to_mask": np.bool_(restrict_to_mask),
         "emission_model_json": np.str_(json.dumps(asdict(config))),
+        **({"pe_index": draw["pe_index"]} if "pe_index" in draw else {}),
     }, file_output)
 
 
