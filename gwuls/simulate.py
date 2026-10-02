@@ -55,6 +55,7 @@ optional:   ts_estimator, e_min, e_max, source_name, type_obs
 from __future__ import annotations
 
 import json
+import multiprocessing
 import os
 import pickle
 import sys
@@ -944,14 +945,20 @@ def _simulate_realisations(engine, coords, amp_arr, global_indices, spectral_ind
 # Per-process state of the parallel path, set once per worker by `_init_worker`.
 _WORKER = {}
 
+# Workers are started from a small forkserver process rather than forked from the
+# caller: fork() has to reserve a copy of the caller's whole address space, and a
+# notebook kernel holding the datasets is large enough (> 10 GB) that the kernel
+# refuses it ("OSError: [Errno 12] Cannot allocate memory") on a busy node.
+_MP_CONTEXT = (multiprocessing.get_context("forkserver")
+               if "forkserver" in multiprocessing.get_all_start_methods() else None)
+
 
 def _init_worker(engine, runs):
     """
     Pool initializer: give each worker the parent's already-built engine (and,
     for emission-model injection, the per-run datasets) once, instead of every
-    chunk re-reading the whole input .pkl. With the default "fork" start method
-    on Linux the child simply inherits these objects; with "spawn"/"forkserver"
-    they are pickled once per worker. Either way a worker no longer holds the
+    chunk re-reading the whole input .pkl. Workers are started via
+    `_MP_CONTEXT` ("forkserver"), so these objects are pickled once per worker. Either way a worker no longer holds the
     parts of the .pkl it never uses (HEALPix map, distance CDF table, TS
     estimator, per-run datasets in the 2D case), which with one worker per core
     was enough to exhaust the node's memory and get workers OOM-killed.
@@ -1028,7 +1035,8 @@ def _run_simulations(engine, coords, amp_arr, spectral_index, e_ref, base_seed,
     chunks = {}
     runs = None if run_spectra is None else run_spectra[0]
     try:
-        with ProcessPoolExecutor(max_workers=n_jobs, initializer=_init_worker,
+        with ProcessPoolExecutor(max_workers=n_jobs, mp_context=_MP_CONTEXT,
+                                 initializer=_init_worker,
                                  initargs=(engine, runs)) as pool:
             futures = [pool.submit(_simulate_chunk_worker, p) for p in payloads]
             with _progress(n_sim, f"Simulating ({n_jobs} workers)", disable=not verbose) as pbar:
