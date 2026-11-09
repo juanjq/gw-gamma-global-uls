@@ -1,37 +1,15 @@
 """
-grb_model.py -- the emission model F(E, t) / L(E', t'), standardised.
+grb_model.py -- the emission model as a rest-frame luminosity L(E', t') per viewing angle.
 
-Implements Steps 1, 2 and 5 of "Simulation guidelines: from a numerical GRB
-model to a GW-marginalised IACT upper limit" (see the .md in the repo notes):
+  * `GRBModel`: L(E', t') for one angle, interpolated bilinearly in (log E', log t').
+    `to_observer` projects it to any (D_L, z) with optional EBL absorption (guidelines
+    Step 7); `from_inaf_fits` reads a catO5 file and regrids it exactly to the rest
+    frame (Step 2); `from_analytic` builds a separable f(E') g(t') model.
+  * `GRBModelSet`: models keyed by angle, `get_model(theta)` for any angle (Step 5):
+    the nearest tabulated one, or log L interpolated linearly in theta at fixed t'
+    (accurate on the 1 deg grid of the benchmark jet).
 
-  * Step 1  -- read a tabulated observer-frame model file (Option 1: the INAF
-              catO5_*.fits catalogue), or build one analytically (Option 2:
-              an arbitrary rest-frame f(E') x g(t'); Option 3: a constant,
-              Gamma=2 power law -- the closed-form validation case).
-  * Step 2  -- project observer-frame F(E, t) to the intrinsic, EBL-free,
-              rest-frame L(E', t') = 4 pi d_L^2 F / (1+z)^2, by an *exact*
-              regrid E'_n = (1+z) E_n, t'_n = t_n/(1+z) -- no interpolation
-              needed at this step -- and interpolate/extrapolate log L
-              bilinearly in (log E', log t') for any later query.
-  * Step 5  -- the model exists only at discrete angles theta_1 < theta_2 <
-              ...  (one file per angle). GRBModelSet.get_model implements
-              all three options from the notes: nearest angle (A), stochastic
-              nearest (B) and log-L interpolation in theta (C) -- the latter
-              peak-aligned by default, so it never produces a double peak.
-              Each file is a different catalogue event with its own E_iso;
-              GRBModelSet.rescaled_to_eiso puts every angle on one common
-              E_iso first (blast-wave scale invariance), so what varies
-              between angles is the angle and not the event-to-event scatter.
-
-A GRBModel is always the *rest-frame* L(E', t') for one viewing angle -- the
-canonical, distance-independent object. `to_observer` (Step 7) projects it to
-any (D_L, z), and optionally multiplies in EBL absorption there (never at the
-model's own z, which the INAF files do not carry to begin with).
-
-Standardisation: `GRBModel.save`/`.load` and `GRBModelSet.save`/`.load` read
-and write one small `.npz` per angle (gwuls.paths.GRB_MODEL_STANDARDIZED_DIR),
-so anything downstream (sim_3d) never has to know the model came from a FITS
-file, an analytic shape or a power law -- it only ever sees this format.
+Both save to / load from one small `.npz` per angle, the format `3_upper_limits` reads.
 """
 
 from __future__ import annotations
@@ -64,16 +42,6 @@ __all__ = [
 
 _CM_PER_MPC = u.Mpc.to(u.cm)
 
-# Blast-wave scale invariance (e.g. van Eerten & MacFadyen 2012): at fixed
-# density and microphysics, E -> k E stretches every dynamical time scale
-# (deceleration, off-axis peak, jet break) by k^(1/3), and at the same stage
-# of the evolution multiplies the synchrotron flux by k for nu_m < nu < nu_c
-# (F_max ~ number of radiating electrons ~ E), or by k^(2/3) above nu_c.
-# (1, 1/3) is also the only one of (1,0), (2/3,1/3), (1,1/3) that makes both
-# the peak time and the peak luminosity of the five catO5 files monotonic in
-# theta (setup_model.ipynb).
-EISO_L_EXPONENT = 1.0
-EISO_T_EXPONENT = 1.0 / 3.0
 
 
 # ===========================================================================
@@ -250,44 +218,15 @@ class GRBModel:
         per_time = _band_integral(v, e_grid, axis=0)
         return float(_band_integral(per_time, t_grid, axis=0))
 
-    def radiated_energy(self) -> float:
-        """int int E' L dE' dt' over the whole tabulated grid, in erg (GeV -> erg)."""
-        return self.band_integral(self.energy[0], self.energy[-1],
-                                  self.time[0], self.time[-1]) * u.GeV.to(u.erg)
-
     def light_curve(self) -> np.ndarray:
         """int E' L dE' over the whole energy grid, erg/s, at each time node."""
         return _band_integral(self.L * self.energy[:, None], self.energy, axis=0) * u.GeV.to(u.erg)
 
     def peak(self) -> Tuple[float, float]:
-        """(t'_peak [s], L_peak [erg/s]) of `light_curve` -- the time node of its
-        maximum, i.e. what Step 5's peak-aligned interpolation lines up."""
+        """(t'_peak [s], L_peak [erg/s]): the time node where `light_curve` peaks."""
         lc = self.light_curve()
         i = int(np.argmax(lc))
         return float(self.time[i]), float(lc[i])
-
-    # -- common-E_iso standardisation ----------------------------------------
-    def rescaled_to_eiso(self, E_iso: float, L_exponent: float = EISO_L_EXPONENT,
-                         t_exponent: float = EISO_T_EXPONENT) -> "GRBModel":
-        """This model as if its event had isotropic energy `E_iso` (erg):
-        L -> k^L_exponent L on the time grid t' -> k^t_exponent t', k = E_iso/self.E_iso.
-
-        The energy axis and the spectral shape are left untouched (the catO5
-        spectra are time-independent power laws, so there is no spectral
-        break for nu_c ~ E^(-2/3) to move). See EISO_L_EXPONENT/EISO_T_EXPONENT
-        for the default exponents; (1, 0) is a plain L/E_iso normalisation.
-        """
-        if not (np.isfinite(self.E_iso) and self.E_iso > 0):
-            raise ValueError(f"model at theta={self.theta_deg} deg has no E_iso to rescale from")
-        k = float(E_iso) / self.E_iso
-        meta = dict(self.meta)
-        meta.setdefault("E_iso_original", self.E_iso)
-        meta["eiso_scaling"] = {"L_exponent": L_exponent, "t_exponent": t_exponent}
-        return GRBModel(
-            theta_deg=self.theta_deg, energy=self.energy, time=self.time * k ** t_exponent,
-            L=self.L * k ** L_exponent, D_L_m=self.D_L_m, z_m=self.z_m, E_iso=float(E_iso),
-            meta=meta,
-        )
 
     # -- Step 7: the one way back to observer flux --------------------------
     def to_observer(self, D_L_Mpc: float, z: float, energy_obs=None, time_obs=None,
@@ -411,20 +350,6 @@ class GRBModel:
         return cls(theta_deg=theta_deg, energy=energy_rest, time=time_rest, L=L,
                   meta={"origin": "from_analytic", "E_ref": E_ref, "L0": L0})
 
-    # -- Option 3: constant Gamma power law -- the closed-form test case ----
-    @classmethod
-    def constant_power_law(cls, energy_rest: np.ndarray, time_rest: np.ndarray,
-                           index: float = 2.0, L0: float = 1.0, E_ref: float = 1.0,
-                           theta_deg: float = 0.0) -> "GRBModel":
-        """f(E') = (E'/E_ref)^-index, g(t') = 1. For index=2, E'_0=E_0, E'_1=E_1,
-        the observed energy flux in the band equals L_k / (4 pi d_i^2) for every
-        z_i -- the analytic anchor used to validate the whole chain."""
-        return cls.from_analytic(
-            lambda E: (E / E_ref) ** (-float(index)), energy_rest, time_rest,
-            temporal_fn=None, theta_deg=theta_deg, L0=L0, E_ref=E_ref,
-        )
-
-
 def _largest_positive_block(good: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """Greedily drop whole energy rows / time columns until every remaining
     cell of `good` (shape (n_E, n_t)) is True; returns the two keep-masks.
@@ -456,8 +381,7 @@ def _largest_positive_block(good: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 
 @dataclass
 class GRBModelSet:
-    """A dict of GRBModel keyed by viewing angle, plus the three ways of the
-    notes to get a model at an angle that isn't on the grid."""
+    """GRBModels keyed by viewing angle [deg]."""
 
     models: Dict[float, GRBModel]
 
@@ -465,45 +389,17 @@ class GRBModelSet:
     def angles_deg(self) -> np.ndarray:
         return np.array(sorted(self.models))
 
-    def rescaled_to_eiso(self, E_iso: float, L_exponent: float = EISO_L_EXPONENT,
-                         t_exponent: float = EISO_T_EXPONENT) -> "GRBModelSet":
-        """Every angle rescaled to one common E_iso (see GRBModel.rescaled_to_eiso).
+    def get_model(self, theta_deg: float, method: str = "interp") -> GRBModel:
+        """The model at any angle (Step 5).
 
-        Each catO5 file is a different catalogue event, with E_iso spanning two
-        decades, so the raw set mixes the angle dependence with that event-to-
-        event scatter. On a common E_iso, the differences left between angles
-        are the angle's (plus whatever parameters the files do not record).
-        Because the rescaling is a uniform shift in (log t', log L), it commutes
-        with the "interp" option: rescaling the set then interpolating equals
-        interpolating then rescaling the result (which carries the
-        log-interpolated E_iso of its two brackets).
-        """
-        return GRBModelSet(models={
-            theta: m.rescaled_to_eiso(E_iso, L_exponent=L_exponent, t_exponent=t_exponent)
-            for theta, m in self.models.items()
-        })
+        - "interp":  log L linear in theta between the two bracketing angles, at fixed
+          (E', t'). On the 1 deg grid of the benchmark jet this is accurate to ~0.05 dex;
+          on a coarse grid with peaks far apart (catO5) it blends two peaks into one
+          broad, too-faint one -- use "nearest" there.
+        - "nearest": the tabulated model closest in angle.
 
-    def get_model(self, theta_deg: float, method: str = "nearest",
-                 rng: Optional[np.random.Generator] = None,
-                 align_peaks: bool = True) -> GRBModel:
-        """Step 5. `method`:
-
-        - "nearest"    (Option A) -- the file with theta^m closest to theta_deg.
-        - "stochastic" (Option B) -- for the bracketing theta_a <= theta_deg <
-          theta_b, use theta_b with probability (theta_deg-theta_a)/(theta_b-theta_a),
-          otherwise theta_a. Correct on average over iterations; needs `rng`.
-        - "interp"     (Option C) -- interpolate log L linearly in theta between
-          theta_a and theta_b. With `align_peaks` (default) this is done at
-          fixed phase log t' - log t'_peak rather than at fixed t', so the
-          result has a single peak at the interpolated peak time, with the
-          peak luminosity and the rise/decay slopes interpolated consistently.
-          With align_peaks=False it is the notes' plain fixed-t' version,
-          which blends two peaks at different t' into a double-peaked light
-          curve. See _interpolate_in_angle.
-
-        theta_deg outside the tabulated range is clipped to the nearest edge
-        angle (with a warning), since the catalogue only spans a handful of
-        discrete angles. A theta_deg on a tabulated angle returns that model.
+        theta_deg outside the tabulated range is clipped to the edge angle (with a
+        warning); an angle on the grid returns that model.
         """
         angles = self.angles_deg
         if angles.size == 0:
@@ -528,19 +424,9 @@ class GRBModelSet:
 
         if method == "nearest":
             return model_a if (theta_deg - theta_a) <= (theta_b - theta_deg) else model_b
-        if method == "stochastic":
-            rng = rng if rng is not None else np.random.default_rng()
-            p_b = (theta_deg - theta_a) / (theta_b - theta_a)
-            return model_b if rng.random() < p_b else model_a
         if method == "interp":
-            return _interpolate_in_angle(model_a, model_b, theta_deg, align_peaks=align_peaks)
-        raise ValueError(f"method must be 'nearest', 'stochastic' or 'interp', got {method!r}")
-
-    def evaluate(self, theta_deg: float, energy_rest, time_rest, method: str = "nearest",
-                rng: Optional[np.random.Generator] = None, align_peaks: bool = True):
-        """Model for any (E', t', theta), even off the tabulated angle grid."""
-        model = self.get_model(theta_deg, method=method, rng=rng, align_peaks=align_peaks)
-        return model.at(energy_rest, time_rest)
+            return _interpolate_in_angle(model_a, model_b, theta_deg)
+        raise ValueError(f"method must be 'interp' or 'nearest', got {method!r}")
 
     # -- persistence ----------------------------------------------------------
     def save(self, directory) -> None:
@@ -581,75 +467,19 @@ def _union_grid(*grids: np.ndarray, tol: float = 1e-9) -> np.ndarray:
     return g[np.concatenate([[True], np.diff(g) > tol])]
 
 
-def _single_peak_part(model: GRBModel) -> GRBModel:
-    """`model` restricted to the time nodes over which its light curve rises
-    monotonically to its peak and decays monotonically after it -- cut at the
-    first local minimum on either side. A re-brightening past that point (the
-    theta=77.8 deg file's last node) would otherwise be extrapolated, as a
-    rising power law, across the whole phase range of the other model."""
-    lc = model.light_curve()
-    i = int(np.argmax(lc))
-    lo, hi = i, i
-    while lo > 0 and lc[lo - 1] <= lc[lo]:
-        lo -= 1
-    while hi < lc.size - 1 and lc[hi + 1] <= lc[hi]:
-        hi += 1
-    if lo == 0 and hi == lc.size - 1:
-        return model
-    return GRBModel(
-        theta_deg=model.theta_deg, energy=model.energy, time=model.time[lo:hi + 1],
-        L=model.L[:, lo:hi + 1], D_L_m=model.D_L_m, z_m=model.z_m, E_iso=model.E_iso,
-        meta=model.meta,
-    )
-
-
-def _interpolate_in_angle(model_a: GRBModel, model_b: GRBModel, theta_deg: float,
-                          align_peaks: bool = True) -> GRBModel:
-    """Step 5, Option C: log L linear in theta, at fixed (E', phase).
-
-    With `align_peaks`, each model's time axis is written as the phase
-    x = log t' - log t'_peak (t'_peak from GRBModel.peak -- the catO5 peaks are
-    achromatic, so one shift per model aligns every energy), log L is
-    interpolated at fixed (E', x), and the result is placed at
-    log t'_peak = (1-w) log t'_peak,a + w log t'_peak,b. So the peak time,
-    the peak luminosity and the slope d log L / d log t' at every phase are
-    each interpolated linearly in theta; and since both inputs peak at x = 0
-    (a node of both), the result has exactly one peak -- each input is first
-    cut to its single-peaked part (_single_peak_part) to guarantee that.
-    Without it, x = log t' and this is the plain fixed-t' interpolation.
-
-    The output grid is the union of both inputs' (log E', x) nodes, so w = 0/1
-    reproduce model_a/model_b exactly (bar any nodes _single_peak_part cut);
-    where only one input is tabulated the other is extrapolated as a local
-    power law (e.g. the theta=77.8 deg file stops 0.3 dex after its peak, so
-    its decay beyond that is its last slope, ~t^-2).
-    """
+def _interpolate_in_angle(model_a: GRBModel, model_b: GRBModel, theta_deg: float) -> GRBModel:
+    """log L linear in theta between two models, at fixed (E', t'), on the union of
+    their grids (so w = 0 and 1 reproduce the inputs exactly)."""
     w = (theta_deg - model_a.theta_deg) / (model_b.theta_deg - model_a.theta_deg)
-    u_a = u_b = 0.0
-    if align_peaks:
-        model_a, model_b = _single_peak_part(model_a), _single_peak_part(model_b)
-        t_pk = [m.peak()[0] for m in (model_a, model_b)]
-        for m, t in zip((model_a, model_b), t_pk):
-            if t in (m.time[0], m.time[-1]):
-                warnings.warn(
-                    f"theta={m.theta_deg} deg: the light-curve peak is at the edge of the "
-                    "tabulated time grid, so the peak alignment there is only approximate.",
-                    stacklevel=3,
-                )
-        u_a, u_b = np.log10(t_pk)
-
     energy = 10.0 ** _union_grid(np.log10(model_a.energy), np.log10(model_b.energy))
-    x = _union_grid(np.log10(model_a.time) - u_a, np.log10(model_b.time) - u_b)
-    log_L = ((1.0 - w) * np.log10(model_a.at(energy, 10.0 ** (x + u_a)))
-             + w * np.log10(model_b.at(energy, 10.0 ** (x + u_b))))
+    time = 10.0 ** _union_grid(np.log10(model_a.time), np.log10(model_b.time))
+    log_L = (1.0 - w) * np.log10(model_a.at(energy, time)) + w * np.log10(model_b.at(energy, time))
 
     E_iso = float("nan")
     if model_a.E_iso > 0 and model_b.E_iso > 0:  # False for NaN
         E_iso = 10.0 ** ((1.0 - w) * np.log10(model_a.E_iso) + w * np.log10(model_b.E_iso))
 
     return GRBModel(
-        theta_deg=theta_deg, energy=energy, time=10.0 ** (x + (1.0 - w) * u_a + w * u_b),
-        L=10.0 ** log_L, E_iso=E_iso,
-        meta={"origin": "interp", "align_peaks": align_peaks,
-              "bracket_deg": (model_a.theta_deg, model_b.theta_deg)},
+        theta_deg=theta_deg, energy=energy, time=time, L=10.0 ** log_L, E_iso=E_iso,
+        meta={"origin": "interp", "bracket_deg": (model_a.theta_deg, model_b.theta_deg)},
     )

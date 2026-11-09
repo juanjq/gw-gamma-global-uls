@@ -1,15 +1,12 @@
-# Physics and methods of `gw-gamma-global-uls`
+# Pipeline: from a GW alert and IACT data to upper limits
 
-This document explains what the repository computes and why, stage by stage, with the equations
-the code implements and their physical meaning. The [`README`](../README.md) covers installation
-and the cluster/local workflow; this file covers the science.
-
-The markdown cells of [`sim_3d_model_CTAO_paper.ipynb`](../notebooks/sim_3d_model_CTAO_paper.ipynb)
-cite the sections of this file as "§n". Step numbers such as "Step 4.3" refer to the note
-*Simulation guidelines: from a numerical GRB model to a GW-marginalised IACT upper limit*.
-The emission model and the viewing angle have their own documents, summarised in §9 and §10;
-[`docs/README.md`](README.md) lists them all. Works are cited as author (year) and listed with
-links in [§14](#14-references).
+What [`3_upper_limits.ipynb`](../notebooks/3_upper_limits.ipynb) computes and why, stage by stage,
+with the equations the code implements. Installation and the cluster/local workflow are in the
+[`README`](../README.md). The emission model and the viewing angle have their own documents,
+[`emission_model.md`](emission_model.md) and [`viewing_angle.md`](viewing_angle.md), summarised in
+§9 and §10. Notebook cells cite this file as "§n"; "Step 4.3" and the like refer to the internal note
+*Simulation guidelines: from a numerical GRB model to a GW-marginalised IACT upper limit*. Works are
+cited as author (year) and listed in [§13](#13-references).
 
 **Contents**
 
@@ -26,8 +23,7 @@ links in [§14](#14-references).
 10. [The viewing-angle distribution](#10-the-viewing-angle-distribution)
 11. [The 3D limit with the emission model](#11-the-3d-limit-with-the-emission-model)
 12. [Validation inventory](#12-validation-inventory)
-13. [Historical notebooks (removed)](#13-historical-notebooks-removed)
-14. [References](#14-references)
+13. [References](#13-references)
 
 ---
 
@@ -41,25 +37,13 @@ those observations?**
 A standard point-source upper limit is not well defined here, because the source position is
 unknown. So is its distance, and so is its orientation. The pipeline defines **one global
 test statistic** over the GW region, $\Lambda$. It calibrates $\Lambda$ by Monte Carlo, using
-the real instrument response and background, and turns it into two upper limits:
+the real instrument response and background, and turns it into three upper limits:
 
 | Limit | Fixed per test | Randomised per realisation | Result |
 | --- | --- | --- | --- |
 | **2D flux UL** | power-law amplitude $\phi_0$ | sky position in the 95% GW region (+ Poisson noise) | $\phi_0^{\rm UL}$, photon/energy flux |
 | **3D luminosity UL** | band luminosity $L_0$ | sky position **and** distance from the full GW map (+ Poisson noise) | $L_0^{\rm UL}$ in erg s⁻¹ |
-| **3D UL with the emission model** | trial luminosity $L_k$ of a GRB afterglow | sky position, distance **and** viewing angle (+ Poisson noise) | $L_k^{\rm UL}$ in erg s⁻¹ |
-
-Status of each component:
-
-| Component | Code | Status |
-| --- | --- | --- |
-| 2D flux UL, Γ = 2 power-law injection | `sim_3d_model_CTAO_paper.ipynb`, `gwuls/simulate.py` | working; run on S240615dg ([§8.1](#81-results-for-s240615dg)) |
-| 3D band-luminosity UL, Γ = 2 power-law injection | same | working; run on S240615dg |
-| 3D UL with the emission model: sky × distance × $\theta_v \mid d$, the model averaged over each run's GTIs with EBL at $z_i$, injected run by run, normalised to $L_k$ (guidelines Steps 3–8) | `sim_3d_model_CTAO_paper.ipynb` (`RUN_MODEL_3D`), `simulate.EmissionModelInjection` | working; run on S240615dg ([§11](#11-the-3d-limit-with-the-emission-model)) |
-| Fixed phenomenological jet (`BENCHMARK`), off-axis by the element integral of Abe et al. (2026), 1° grid in $\theta_v$ | `setup_model_phenomenological_fixed.ipynb`, `gwuls/grb_phenomenological.py` | built and validated; **the model the 3D limit injects** ([`phenomenological_model.md`](phenomenological_model.md)) |
-| `GRBModel` format, catO5 catalogue files: guidelines Steps 1, 2, 5 and 7 | `setup_model.ipynb`, `gwuls/grb_model.py` | built and validated; any `GRBModelSet` cache can be injected through `model_dir_3d` ([`setup_model.md`](setup_model.md)) |
-| Stochastic phenomenological model: a fresh random event per call | `setup_model_phenomenological.ipynb` | exploratory, standalone ([`phenomenological_model.md`](phenomenological_model.md) §8) |
-| Viewing-angle draw $p(\theta_v \mid d)$: guidelines Step 4.3 | `setup_angle_distribution.ipynb`, `gwuls/gw_pe.py`, `gwuls/angle_distribution.py` | built and validated; drawn per realisation by the emission-model limit ([`viewing_angle_distribution.md`](viewing_angle_distribution.md)) |
+| **3D UL with the emission model** | trial luminosity $L_k$ of a GRB afterglow | sky position, distance **and** viewing angle, together from one GW PE sample (+ Poisson noise) | $L_k^{\rm UL}$ in erg s⁻¹ |
 
 ---
 
@@ -84,25 +68,8 @@ Status of each component:
                                               • background only (φ0 = 0): p-value, median Λ
                                               • 2D: φ0 fixed, (RA, Dec) random in M95
                                               • 3D: L0 fixed, (RA, Dec, d) random in the full map
-<<<<<<< HEAD
-                                              • 3D model: L_k fixed, (RA, Dec, d, θ_v) random,
-                                                GRB afterglow + EBL, injected run by run  ◄──┐
-                                          │                                                  │
-                                         [E] f(x) = P(Λ_x > Λ*), fitted as a probit in log x │
-                                              to realisations that each have their own x     │
-                                              → x_UL where f = CL = 0.95, ± its MC uncertainty
-                                          │                                                  │
-                                         [F] both ULs as flux AND as luminosity,             │
-                                              over the distance posterior → .json            │
-                                                                                             │
-   Run once, read by the 3D model limit ─────────────────────────────────────────────────────┘
-     setup_model_phenomenological_fixed.ipynb → L(E', t'; θ_v) of the benchmark jet, 1° grid
-                                                (data/models/grb_afterglow_phenomenological/benchmark/)
-     setup_angle_distribution.ipynb           → p(d, θ_v) and p(θ_v | d) for one alert
-                                                (data/gw_input/<alert>_theta_distribution.npz)
-=======
-                                              • 3D, emission model: (RA, Dec, d, θ_v) from one
-                                                PE sample (default), or skymap + an angle option
+                                              • 3D model: L_k fixed, (RA, Dec, d, θ_v) from one
+                                                PE sample, GRB afterglow + EBL, run by run
                                           │
                                          [E] f(x) = P(Λ_x > Λ*), fitted as a probit in log x
                                               to realisations that each have their own x
@@ -111,41 +78,28 @@ Status of each component:
                                          [F] both ULs as flux AND as luminosity,
                                               over the distance posterior → .json
 
-   Prepared ahead, read by [D] for the emission-model 3D UL (RUN_MODEL_3D):
-     setup_model*.ipynb             → L(E', t'; θ) per viewing angle, rest frame
-                                      (data/models/grb_afterglow_*/…/*.npz)
-     setup_angle_distribution.ipynb → standardized PE samples (RA, Dec, d, θ_v)
-                                      (data/gw_pe/standardized/<alert>.h5), and
-                                      p(d, θ_v), p(θ_v | d) for one alert
-                                      (data/gw_input/<alert>_theta_distribution.npz)
->>>>>>> 59ef1f28b079adf81d9b3468b9f3b8d00d5f45ae
+   Prepared ahead, read by [D] for the emission-model limit (RUN_MODEL_3D):
+     1_grb_model.ipynb         → L(E', t'; θ_v) of the benchmark jet, 1° grid
+                                 (data/models/grb_afterglow_phenomenological/benchmark/)
+     2_gw_viewing_angle.ipynb  → standardized PE samples (RA, Dec, d, θ_v)
+                                 (data/gw_pe/standardized/<alert>.h5), and
+                                 p(θ_v | d) for the non-PE angle options
 ```
 
 **Which file does what**
 
 | File | Role |
 | --- | --- |
-<<<<<<< HEAD
-| `notebooks/sim_3d_model_CTAO_paper.ipynb` | Main pipeline. Part 1 prepares data (stages A and B, input `.pkl`, now also the per-run datasets and GTIs); Part 2 runs the simulations (stages D, E and F) for the 2D and 3D limits, and the 3D limit again with the emission model injected (`RUN_MODEL_3D`). |
-| `notebooks/setup_model.ipynb` | Run once. Standardises the catO5 emission-model files ([§9](#9-the-emission-model)). |
-| `notebooks/setup_model_phenomenological.ipynb` | Exploratory, standalone. Draws random events from the Nava (2020) / Abe et al. (2026) recipe and compares them with the catO5 files. Not read by any other notebook. |
-| `notebooks/setup_model_phenomenological_fixed.ipynb` | Run once. Builds the benchmark jet at every angle and writes `data/models/grb_afterglow_phenomenological/benchmark/` (optionally the one-sigma variants). This is the model the 3D limit injects. |
-| `notebooks/setup_angle_distribution.ipynb` | Run once per alert. Standardises the PE release and builds $p(d,\theta_v)$ ([§10](#10-the-viewing-angle-distribution)). |
-=======
-| `notebooks/sim_3d_model_CTAO_paper_pe_joint.ipynb` | Main pipeline. Part 1 prepares data (stages A and B, input `.pkl`, now also the per-run datasets and GTIs); Part 2 runs the simulations (stages D, E and F) for the 2D and 3D limits, and the 3D limit again with the emission model injected (`RUN_MODEL_3D`), by default at (sky, $d$, $\theta_v$) drawn together from the PE ([§11](#11-what-is-not-wired-together-yet)). |
-| `notebooks/sim_3d_model_CTAO_paper.ipynb` | Previous version of the main pipeline: the emission-model limit draws sky and distance from the skymap only. Kept for comparison. |
-| `notebooks/setup_model.ipynb` | Run once. Standardises the emission-model files ([§9](#9-the-emission-model-setup_model)). |
-| `notebooks/setup_model_phenomenological.ipynb` | Exploratory, standalone. Implements the Nava (2020)/Abe et al. (2026) stochastic recipe directly (`gwuls/grb_phenomenological.py`) instead of reading the five catO5 files, and cross-checks the two against each other. Not read by any other notebook. |
-| `notebooks/setup_model_phenomenological_fixed.ipynb` | Run once. Builds the deterministic benchmark jet at every angle and writes `data/models/grb_afterglow_phenomenological/benchmark/` (optionally the one-sigma variants), loadable exactly like the catO5 cache. |
-| `notebooks/setup_angle_distribution.ipynb` | Run once per alert. Standardises the PE release and builds $p(d,\theta_v)$ ([§10](#10-the-viewing-angle-distribution-setup_angle_distribution)). |
->>>>>>> 59ef1f28b079adf81d9b3468b9f3b8d00d5f45ae
+| `notebooks/1_grb_model.ipynb` | Run once. Builds the benchmark jet at every angle and saves it ([§9](#9-the-emission-model)). |
+| `notebooks/2_gw_viewing_angle.ipynb` | Run once per alert. Standardises the PE release and builds $p(d,\theta_v)$ ([§10](#10-the-viewing-angle-distribution)). |
+| `notebooks/3_upper_limits.ipynb` | Main pipeline. Part 1 prepares the data (stages A and B, the input `.pkl`, per-run datasets and GTIs); Part 2 runs stages D–F for the 2D, 3D and emission-model limits. |
+| `notebooks/extra/` | Optional explainers, read by nothing else: the catO5 files, random draws from the jet recipe, how each realisation's source is drawn. |
 | `gwuls/utils.py` | HEALPix ↔ WCS, credible-region masks, per-bin distance CDFs. |
-| `gwuls/simulate.py` | Spectral conversions, input validation, the TS/Λ engine, 2D and 3D samplers, the emission-model injection, the upper-limit fit (and the older bisection), reporting. Also a CLI used by the Slurm grid scan. |
-| `gwuls/grb_model.py` | $L(E',t')$ per angle: rest-frame projection, interpolation, $E_{\rm iso}$ rescaling, angle interpolation, EBL. |
+| `gwuls/simulate.py` | Spectral conversions, input validation, the TS/Λ engine, 2D and 3D samplers, the emission-model injection, the upper-limit fit, reporting. |
+| `gwuls/grb_model.py` | $L(E',t')$ per angle: rest frame, projection to the observer, angle interpolation, EBL. |
 | `gwuls/grb_phenomenological.py` | The Nava (2020) / Abe et al. (2026) recipe, the jet structure, the off-axis element integral, `BENCHMARK`. |
 | `gwuls/gw_pe.py` | GWTC PE release (GBs) → ~1 MB per-alert file of posterior samples. |
 | `gwuls/angle_distribution.py` | Joint $p(d,\theta_v)$, its conditionals and marginals, and the population priors. |
-| `gwuls/slurm.py` | Submits one grid point of `simulate.py` as an `sbatch` job. |
 | `gwuls/plotting.py`, `gwuls/paths.py` | Figures; every directory path. |
 
 ---
@@ -243,8 +197,7 @@ translation in the report ([§8](#8-f-reporting-both-limits-both-ways)).
 
 With `USE_DIRAC_DELTA = True`, all the probability is put in the hottest pixel. $\Lambda$ then
 reduces to the TS at a single known position, with no trials factor, so the Monte-Carlo limit
-should reproduce gammapy's ordinary per-pixel UL. This is the closure test run in the historical
-`delta*.ipynb` notebooks ([§13](#13-historical-notebooks-removed)).
+should reproduce gammapy's ordinary per-pixel UL (checked in early versions, in git history).
 
 ---
 
@@ -348,7 +301,7 @@ $$
 $$
 
 Per-pixel sky-map ULs are divided by $\kappa$. These per-pixel ULs (95% CL, `n_sigma_ul = Φ⁻¹(0.95)`)
-carry **no trials factor**. They are used as a sanity reference in [§7.7](#77-trials-factor-sanity-check).
+carry **no trials factor**. They are used as a sanity reference in [§7.6](#76-trials-factor-sanity-check).
 
 ---
 
@@ -477,14 +430,8 @@ the source lying inside the analysis field, since the sampler renormalises over 
 
 ### 6.5 Common random numbers and seeding
 
-Realisation $i$ always uses fake seed `base_seed + i`, and positions or distances come from a
-fixed seed (`12345`). Every tested $\phi_0$ or $L_0$ therefore sees **the same** background
-fluctuations and the same positions and distances. Only the brightness changes between tests.
-The fraction curve $f(x)$ of §7 is then smooth and almost monotonic in $x$, instead of jittering
-by Monte-Carlo noise from one bisection step to the next.
-
-Because seeds follow the global realisation index, parallel runs (`N_JOBS`) produce exactly the
-same $\Lambda$ sample as sequential ones. The closure tests (§7.6) use their own seeds
+Realisation $i$ always uses fake seed `base_seed + i`. Because seeds follow the global realisation index, parallel runs (`N_JOBS`) produce exactly the
+same $\Lambda$ sample as sequential ones. The closure tests (§7.5) use their own seeds
 (900 000 for the background, 987 654 for sky, distance and angle), so they are independent of
 the realisations that set the limit.
 
@@ -498,8 +445,7 @@ distances with the seed `[12345, r]`.
 
 ## 7. E: From Λ distributions to an upper limit
 
-*Code: `simulate._fit_ul`, `run_fit_ul`, `run_fit_ul_3d` (default, §7.3); `simulate._bisect_ul`,
-`run_iterative_ul`, `run_iterative_ul_3d` (alternative, §7.4).*
+*Code: `simulate._fit_ul`, `run_fit_ul`, `run_fit_ul_3d` (§7.3).*
 
 ### 7.1 Definition
 
@@ -561,13 +507,11 @@ support fractions next to each other for this reason. If it is above 0.95 but be
 flattens out below 1 and the limit sits where it is still climbing towards that ceiling. The
 fit of §7.3 measures the ceiling as its parameter $c$.
 
-### 7.3 Fit of the detection probability (default, `UL_METHOD = "fit"`)
+### 7.3 Fit of the detection probability
 
 *Code: `simulate._fit_ul`, `run_fit_ul`, `run_fit_ul_3d`. Figure: `plotting.plot_ul_fit`.*
 
-The bisection simulates $N$ realisations at one $x$, keeps only whether their fraction is above or
-below CL, and moves on; every step waits for the previous one. Here every realisation $i$ gets
-its **own** injected strength $x_i$, together with its own position (and distance, and viewing
+Every realisation $i$ gets its **own** injected strength $x_i$, together with its own position (and distance, and viewing
 angle), and records $y_i = \mathbf 1[\Lambda_i > \Lambda^\star]$. The $y_i$ are independent Bernoulli
 draws with probability $f(x_i)$, modelled as
 
@@ -600,8 +544,7 @@ the figures, and the JSON export (`*_1sigma`, `*_2sigma`).
 
 1. *Scout*: `n_scout` = 500 realisations, stratified log-uniformly over the bracket. The fit must
    put the crossing inside the bracket, and the top and bottom 5% of realisations must lie on
-   either side of CL; otherwise the run stops with the same kind of bracket error as the
-   bisection.
+   either side of CL; otherwise the run stops with a bracket error.
 2. *Refine*: up to `n_refine` = 1000 realisations where the linear predictor runs from $-2.5$ to
    $z_0 + 1.5$, i.e. $f$ from just above $f_0$ to 99.9% of the way to $c$, plus 10% just above that
    range to measure $c$. The fit uses every realisation from the lower edge of this window up.
@@ -626,7 +569,7 @@ an independent $(x_i, \Lambda_i)$ pair, so the rounds of an interrupted run rema
 **Goodness of fit.** A Hosmer–Lemeshow test (Hosmer & Lemeshow 1980) compares observed and expected detections in
 equal-count groups. The probit is an approximation, and with thousands of realisations the test
 can see shape differences that do not bias the limit (see the single-position curve below). A
-small p-value is a prompt to look at the pulls near $x_{\rm UL}$ and at the closure test (§7.6),
+small p-value is a prompt to look at the pulls near $x_{\rm UL}$ and at the closure test (§7.5),
 not a failure by itself.
 
 **Validation.** Synthetic detection curves with a known limit, 200 independent fits each at the
@@ -651,7 +594,7 @@ about 0.5σ high, which is conservative, and the 1σ interval covers only 56–6
 outliers (pull s.d. 2.2 at $c$ = 0.985). The ceiling itself is measured well: the fitted $c$
 averages 0.987 for a true 0.985. The run prints a note whenever $c$ is significantly below 1.
 In that case treat the interval as a lower bound on the MC uncertainty and rely on the closure
-test (§7.6), or set `restrict_to_mask_3d = True`, which removes the cap.
+test (§7.5), or set `restrict_to_mask_3d = True`, which removes the cap.
 
 Rejected variants: without the ceiling $c$, the two capped curves came out +1.05σ and +6.3σ high
 with 1σ coverage 0.40 and 0.01; a window starting at $\eta = -1.5$ left a −0.28σ bias on the
@@ -664,56 +607,14 @@ the limit and its 1σ/2σ intervals; (d) the likelihood profile of $x_{\rm UL}$ 
 (Hessian) approximation; (e) the estimate and its 1σ after each round, against the requested
 precision; (f) the goodness-of-fit pulls.
 
-### 7.4 Bisection (alternative, `UL_METHOD = "bisect"`)
+### 7.4 (removed)
 
-Bisection works in $\log x$ between `amp_lo, amp_hi` = $10^{-13}, 10^{-10}$ (2D) or
-`lum_lo, lum_hi` = $10^{42}, 10^{50}$ erg s⁻¹ (3D):
+Earlier bisection and Slurm grid-scan versions of the UL search are in the git history before
+Nov 2026.
 
-1. **Bracket check:** evaluate $f$ at both ends. Warn loudly if the crossing is outside.
-2. **Iterate:** $x_{\rm mid} = \sqrt{x_{\rm lo}x_{\rm hi}}$. Simulate $N$ realisations and set
-   $f = \frac1N\sum\mathbf{1}[\Lambda>\Lambda^\star]$. If $f>\mathrm{CL}$ then $x_{\rm hi}=x_{\rm mid}$,
-   otherwise $x_{\rm lo}=x_{\rm mid}$.
-3. **Stop** when both conditions hold (or after `max_iter` = 20 steps):
+### 7.5 Closure test (3D)
 
-$$
-\log_{10}\frac{x_{\rm hi}}{x_{\rm lo}} < \texttt{precision}\ (0.02\ \text{dex}),
-\qquad
-|f-\mathrm{CL}| < \max\!\big(\texttt{frac\_tol},\;2\sigma_f\big),\quad \sigma_f=\sqrt{\tfrac{f(1-f)}{N}} .
-$$
-
-The $2\sigma_f$ term exists because at $N=1000$ and $f=0.95$, $\sigma_f = 0.0069$. A tolerance of
-0.005 can never be met by noise alone.
-
-4. **Final value.** The crossing is interpolated linearly in $(\log_{10}x, f)$ between the
-   evaluated points that straddle CL, using every point of the bisection:
-
-$$
-\log_{10}x_{\rm UL} = \log_{10}x_i + \frac{\mathrm{CL}-f_i}{s},\qquad s=\frac{f_{i+1}-f_i}{\log_{10}x_{i+1}-\log_{10}x_i},
-\qquad \sigma_{\log_{10}x_{\rm UL}} = \frac{\bar\sigma_f}{|s|}.
-$$
-
-   This gives a 1σ Monte-Carlo uncertainty on the limit.
-
-5. **Diagnostics:** converged or not, limit at a bracket edge, and the number of monotonicity
-   violations larger than 3σ in the sorted $f(x)$ curve.
-
-Speed-ups that do not change the statistic: `N_JOBS` parallelises the $N$ realisations of one
-step, and `USE_DYNAMIC_N_SIM` uses few realisations while the bracket is wide, growing
-geometrically to $N$. Early steps only need the sign of $f-\mathrm{CL}$. Every $\Lambda$ sample is
-cached by $x$ on disk.
-
-### 7.5 Grid-scan alternative
-
-With `USE_ITERATIVE_ULS = False`, the notebook submits one Slurm job per amplitude on a 150-point
-log grid (`slurm.submit_simulation_job` → `python gwuls/simulate.py ... --mode 2d|3d`). It then
-applies the same crossing interpolation to the gridded $f$. Older notebooks fitted a sigmoid
-$f(\log x) = b + (L-b)/(1+e^{-k(\log x - x_0)})$ instead (`utils.sigmoid`); that fit is no longer
-used for the quoted number.
-
-### 7.6 Closure test (3D)
-
-$x_{\rm UL}$ is read off a fitted curve (or interpolated between bisection steps), so it was
-never simulated itself. The notebook runs $N$ fresh realisations exactly at $L_0^{\rm UL}$ with
+$x_{\rm UL}$ is read off a fitted curve, so it was never simulated itself. The notebook runs $N$ fresh realisations exactly at $L_0^{\rm UL}$ with
 independent seeds and checks (`simulate.closure_pull`)
 
 $$
@@ -723,9 +624,9 @@ $$
 where $\sigma_f$ is the binomial error of the closure sample and $\sigma_{\rm UL}$ the limit's own
 MC uncertainty mapped through the fitted curve, $\tfrac12|f(x_{\rm UL}^{+1\sigma}) - f(x_{\rm UL}^{-1\sigma})|$.
 At $N = 1000$ the two are comparable, so leaving out $\sigma_{\rm UL}$ would fail good limits
-about as often as it passes them. For a bisection result $\sigma_{\rm UL} = 0$.
+about as often as it passes them.
 
-### 7.7 Trials-factor sanity check
+### 7.6 Trials-factor sanity check
 
 The global 2D limit applies to the *maximum* over the region, so it pays the trials factor. The
 per-pixel sky-map ULs do not. The global limit should therefore sit **at or above** the largest
@@ -786,185 +687,107 @@ These numbers come from the last run of the notebook: LST-1+MAGIC stereo, runs 1
 | 2D as a luminosity at 5/50/95% distance | 1.66 / 3.18 / 5.19 × 10⁴⁵ erg s⁻¹ |
 | **3D luminosity UL** (power law, no EBL) | $L_0 = 3.85\times10^{45}$ erg s⁻¹ (−5.0%/+5.5%); closure pull +1.36σ, pass |
 | 3D / 2D at the median distance | 1.21: the 3D limit is looser and lies inside the 2D range |
-| **3D UL with the emission model** (`gti_mean`, Franceschini & Rodighiero 2017 EBL) | $L_k = 1.33\times10^{47}$ erg s⁻¹ (−6.4%/+7.1%); closure pull +0.11σ, pass |
-| Model / power-law 3D limit | 34.6 |
+| **3D UL with the emission model** (`gti_mean`, Franceschini & Rodighiero 2017 EBL, joint PE draw) | $L_k = 1.99\times10^{47}$ erg s⁻¹ (−7.9%/+8.9%); closure pull +1.06σ, pass |
+| Model / power-law 3D limit | 51.7 |
 
 All three limits used 5500 realisations and stopped on the budget (`converged = False`, §7.3).
-The emission-model limit is 35× above the power-law one. The ratio combines everything the model
-changes: EBL absorption at the drawn $z$ (5–95%: 0.20–0.34), the softer index (2.2), the
-rest-frame band, and the light curve across the runs (§11). Its fitted
-ceiling is $c = 0.995$, slightly below 1, so its 1σ interval may undercover (§7.3).
+The emission-model limit is 52× above the power-law one. The ratio combines everything the model
+changes: EBL absorption at the drawn $z$ (5–95%: 0.22–0.34), the softer index (2.2), the
+rest-frame band, the light curve across the runs (§11), and the PE distances (median 1564 Mpc)
+against the skymap ones the power law uses (1422 Mpc). Its fitted ceiling is $c = 0.994$, slightly
+below 1, so its 1σ interval may undercover (§7.3). The earlier skymap route (distances from the
+skymap, angles from $p(\theta_v\mid d)$) gave $1.33\times10^{47}$ erg s⁻¹.
 
 ---
 
 ## 9. The emission model
 
-*Code: `grb_model.py`, `grb_phenomenological.py`. Full write-ups:
-[`setup_model.md`](setup_model.md) (the format and the catO5 files) and
-[`phenomenological_model.md`](phenomenological_model.md) (the jet the limit injects).
-Guidelines Steps 1, 2, 5 and 7.*
+*Full write-up: [`emission_model.md`](emission_model.md). Code: `grb_model.py`,
+`grb_phenomenological.py`. Guidelines Steps 1, 2, 5 and 7.*
 
-### 9.1 Why
-
-The power-law limits inject a constant Γ = 2 spectrum. A physical counterpart, such as a GRB
-afterglow seen off-axis, has a spectrum and a light curve that depend on energy, time since the
-merger, and viewing angle. The emission model provides this in a distance-independent form, so
-that each realisation can place it at its own $(d_i, z_i, \theta_i)$.
-
-### 9.2 The format: rest-frame luminosity per viewing angle
-
-A model is a photon-number luminosity $L(E', t';\theta)$ [ph s⁻¹ GeV⁻¹] in the source rest frame,
-tabulated per viewing angle (`GRBModel`, one `.npz` per angle in a `GRBModelSet`). It is intrinsic:
-no distance and no EBL. A realisation projects it to the observer with
+The power-law limits inject a constant Γ = 2 spectrum. A real counterpart, such as a GRB afterglow
+seen off-axis, has a spectrum and light curve that depend on energy, time since the merger and
+viewing angle. The model is stored as a rest-frame photon luminosity $L(E', t';\theta)$
+[ph s⁻¹ GeV⁻¹] per angle, with no distance and no EBL, and each realisation projects it to its own
+$(d_i, z_i)$:
 
 $$
 F_i(E,t) = \frac{(1+z_i)^2}{4\pi d_i^2}\;L\big((1+z_i)E,\;t/(1+z_i);\theta_i\big)\;e^{-\tau(E,z_i)},
 $$
 
-where $(1+z)^2$ appears because $L$ counts photons, $t$ is the time since the merger, and
-$\tau(E,z)$ is the EBL optical depth (Franceschini & Rodighiero 2017 in `sim_3d`, Domínguez et al.
-2011 as the `grb_model` default). Cosmology is Planck18 (Planck Collaboration 2020). Between
-tabulated angles, $\log L$ is interpolated linearly in θ ([`setup_model.md`](setup_model.md) §4).
+with Franceschini & Rodighiero (2017) EBL and Planck18 cosmology.
 
-### 9.3 The model that is injected: the benchmark phenomenological jet
-
-The 3D limit injects one fixed jet built from the recipe of Nava (2020) and Abe et al. (2026), with
-every input at its population median ($E_{\gamma,\mathrm{iso}} = 2\times10^{50}$ erg,
-$\theta_\mathrm{core} = 14°$, $\Gamma_\mathrm{core} = 200$, decay index −1.45, photon index 2.2):
-
-- the on-axis light curve is a broken power law peaking at the deceleration time and anchored to
-  $L_{\mathrm{TeV}}$(0.3–1 TeV) at $t' = 11$ h through the $L_X$–$E_\mathrm{iso}$ relation of
-  Berger (2014);
-- the jet is Gaussian in energy and Lorentz factor, and is seen off-axis through the
-  equal-arrival-time element integral of Abe et al. (2026) Sec. 3.4, after Lamb & Kobayashi (2017);
-- it is tabulated at 0°, 1°, …, 90° in `data/models/grb_afterglow_phenomenological/benchmark/`.
-
-Off-axis, the peak is later and much fainter: at 11 h the flux is $10^{-5}$ of the on-axis value at
-50°. The spectrum keeps its shape at every angle. Details, validation (against an independent
-on-axis calculation and by shape fits to all five catO5 files) and the population variants are in
-[`phenomenological_model.md`](phenomenological_model.md).
-
-### 9.4 The catO5 catalogue files
-
-The five INAF / CTA-GW O5 files (`catO5_*.fits`, at 9.1°, 13.2°, 22.6°, 28.6° and 77.8°) are
-the same recipe run on five different events. [`setup_model.md`](setup_model.md) converts them
-to the same format. Because they are five events and not one jet seen from five angles, they are
-first put on a common $E_\mathrm{iso}$ by the blast-wave scaling
-$L\to k\,L(E', t'/k^{1/3})$, $k = E_\mathrm{iso,ref}/E_\mathrm{iso}$ (Blandford & McKee 1976;
-Sari, Piran & Narayan 1998; van Eerten & MacFadyen 2012), and then interpolated at fixed
-light-curve phase. They can be injected instead of the benchmark by pointing `model_dir_3d` at
-their cache. The wide gap between 28.6° and 77.8° makes them a coarse model off-axis.
+The injected model is **one fixed jet**, the benchmark: the recipe of Nava (2020) and Abe et al.
+(2026) with every input at its population median ($E_{\gamma,\mathrm{iso}} = 2\times10^{50}$ erg,
+$\theta_\mathrm{core} = 14°$, $\Gamma_\mathrm{core} = 200$, decay index −1.45, photon index 2.2),
+Gaussian in energy and Lorentz factor, seen off-axis through the element integral of Abe et al.
+(2026) Sec. 3.4, tabulated at 0°, 1°, …, 90°, and interpolated in $\log L$ between them. Off-axis
+the peak comes later and is much fainter (at 11 h, $10^{-5}$ of on-axis at 50°); the spectrum
+keeps its shape. It reproduces the shapes of the five INAF catO5 files, which are the same recipe
+run on five events.
 
 ---
 
 ## 10. The viewing-angle distribution
 
-*Code: `gw_pe.py`, `angle_distribution.py`; notebook `setup_angle_distribution.ipynb`. Full
-write-up: [`viewing_angle_distribution.md`](viewing_angle_distribution.md). Guidelines Step 4.3.*
+*Full write-up: [`viewing_angle.md`](viewing_angle.md). Code: `gw_pe.py`, `angle_distribution.py`.
+Guidelines Step 4.3.*
 
-### 10.1 Why
+GW parameter estimation measures $\theta_{JN}\in[0°,180°]$; the jet is bipolar, so
+$\theta_v = \min(\theta_{JN},\,180°-\theta_{JN})$. The GW amplitude constrains mainly
+$\Theta(\theta)/d$, so distance and angle are strongly correlated (for S240615dg,
+$\mathrm{corr}(d,\cos\theta_v) = 0.82$; the median of $p(\theta_v\mid d)$ runs from 49.5° at 1123 Mpc
+to 13.6° at 1849 Mpc) and must be drawn together.
 
-Each realisation of the emission-model limit needs a viewing angle $\theta_i$ as well as
-$(\mathrm{RA}_i, \mathrm{Dec}_i, d_i)$. An on-axis afterglow is far brighter and earlier than an
-off-axis one (§9.3), so the angle distribution decides which light curves the limit is built from.
-
-### 10.2 From $\theta_{JN}$ to the jet viewing angle
-
-GW parameter estimation measures $\theta_{JN}\in[0°,180°]$, the angle between the binary's total
-angular momentum and the line of sight. The jet is bipolar along it, so
-
-$$
-\theta_v = \min(\theta_{JN},\,180°-\theta_{JN}) \in [0°, 90°].
-$$
-
-### 10.3 The distance–inclination degeneracy
-
-The GW amplitude constrains mainly $\Theta(\theta)/d$: a face-on binary far away looks like an
-inclined one nearby (Finn & Chernoff 1993). Distance and angle are therefore strongly correlated
-(for S240615dg, $\mathrm{corr}(d,\cos\theta_v) = 0.82$), and the angle must be drawn
-**conditioned on the realisation's distance**,
-
-$$
-p(\theta\mid d_i) = \frac{p(d_i,\theta)}{p(d_i)} .
-$$
-
-For S240615dg, the median of $p(\theta_v\mid d)$ runs from 49.5° at 1123 Mpc to 13.6° at 1849 Mpc.
-
-### 10.4 PE data
-
-A GWTC `*-combined_PEDataRelease.hdf5` (GBs) is reduced to
-`data/gw_pe/standardized/<superevent>.h5` (~1 MB, tracked in git). It keeps the same number of
-samples (5000) from every waveform analysis, so the file is the equal-weight mixture that the
-catalogue papers quote.
+A GWTC PE release (GBs) is reduced to `data/gw_pe/standardized/<superevent>.h5` (~1 MB, tracked):
 
 | alert | GW name | $d_L$ [Mpc], median [90%] | $\theta_v$ [deg], median [90%] | $P(\theta_v<30°)$ |
 | --- | --- | --- | --- | --- |
 | S240615dg | GW240615_113620 | 1566 [1123, 1849] | 24.4 [6.5, 51.1] | 0.65 |
 | S241125n | GW241125_010116 | 4748 [2600, 8611] | 55.8 [15.6, 86.0] | 0.17 |
 
-Both are binary black holes. They exercise the method; no standard GRB afterglow is expected.
+Both are binary black holes: they exercise the method, no afterglow is expected.
 
-### 10.5 The joint $p(d,\theta_v)$
+**Skymap vs PE distance.** Drawing $d_i$ from the alert skymap and $\theta_i$ from the PE conditional
+mixes two posteriors that disagree for S240615dg (skymap 1421 [1028, 1815] Mpc, PE 1566 [1123, 1849]
+Mpc), which moves the $\theta_v$ median by about **+8°**. The emission-model limit therefore takes
+(RA, Dec, $d$, $\theta_v$) together from one PE sample by default (§11.1).
 
-`JointDistanceAngle.from_samples` estimates the joint with a Gaussian KDE in $(d, \cos\theta_v)$,
-where an isotropic prior is flat. It uses a full-covariance (Scott's rule) kernel that follows the
-correlation, with exact reflection at the boundaries, and maps the result to per-degree density
-with the $\sin\theta_v$ Jacobian. Conditionals, marginals and $p(d\mid\theta_0)$ all come from
-this one grid.
-
-### 10.6 Without PE
-
-<<<<<<< HEAD
-Low-latency skymaps carry no inclination. The fallbacks are: isotropic, $p\propto\sin\theta$
-(median 60°); the GW-detected population of Schutz (2011),
-$p\propto\sin\theta\,[(1+\cos^2\theta)^2/4+\cos^2\theta]^{3/2}$ (median 36°); a `"selection"` model
-with an explicit horizon, which also gives $p(\theta\mid d)$; and fixed placeholders. The
-event's PE (median 24.7° for S240615dg) is much more face-on than either prior.
-=======
-Drawing $d_i$ from the **alert skymap** (§3.4) and then $\theta_i$ from the **PE** conditional mixes
-two posteriors. For S240615dg they disagree: skymap 1421 [1028, 1815] Mpc versus PE 1566
-[1123, 1849] Mpc. Skymap distances in the near tail pick up the inclined angles of that tail, which
-shifts the $\theta_v$ median by **+8.2°**. When PE samples exist, the guidelines' preferred route
-avoids this by drawing a PE sample and taking (RA, Dec, $d$, $\theta_v$) together, which keeps
-every correlation. That is the default of the emission-model limit
-(`SKY_DISTANCE_MODE = THETA_MODE = "pe"`, §11).
->>>>>>> 59ef1f28b079adf81d9b3468b9f3b8d00d5f45ae
-
-### 10.7 Skymap distance versus PE distance
-
-`sim_3d` draws $d_i$ from the **alert skymap** (§3.4) and then $\theta_i$ from the **PE**
-conditional. For S240615dg the two distance posteriors disagree: skymap 1421 [1028, 1815] Mpc,
-PE 1566 [1123, 1849] Mpc. Nearer distances pick up the more inclined angles of the near tail,
-which shifts the $\theta_v$ median by **+8.2°** (32.6° instead of 24.4°). The preferred route
-when PE exists draws a PE sample and takes (RA, Dec, $d$, $\theta_v$) together
-(`ThetaDistribution.sample_joint`). It is implemented in `angle_distribution` but not yet wired
-into `sim_3d` (§11.4).
+**Without PE**, the options are isotropic ($\sin\theta$, median 60°), the GW-detected population of
+Schutz (2011) (median 36°), a selection model with an explicit horizon, and fixed placeholders. The
+S240615dg PE (median 24.4°) is far more face-on than either prior.
 
 ---
 
-<<<<<<< HEAD
 ## 11. The 3D limit with the emission model
 
-*Code: `simulate.EmissionModelInjection`, `run_fit_ul_3d`; notebook section "3D luminosity upper
-limit with the emission model" (`RUN_MODEL_3D`).*
+*Code: `simulate.EmissionModelInjection`, `sample_injections_3d`, `run_fit_ul_3d`; notebook section
+"3D luminosity upper limit with the emission model" (`RUN_MODEL_3D`).*
 
 ### 11.1 One realisation
 
-The construction is the same as for the power-law 3D limit (§6.4), with the same Λ (§4.3), the
-same fit (§7.3) and the same sky and distance seeds. Only the injected source changes:
+The construction is the same as for the power-law 3D limit (§6.4), with the same Λ (§4.3) and the
+same fit (§7.3). Only the injected source changes:
 
-1. draw a sky bin $b$ and a distance $d_i$ from the skymap, exactly as in §6.4;
-2. draw a viewing angle $\theta_i \sim p(\theta_v\mid d_i)$ from the alert's cache (§10), on its
-   own random stream, so the sky and distance draws do not depend on it;
-3. take the benchmark jet at $\theta_i$ (§9.3) and project it to $(d_i, z_i)$ with EBL (§9.2);
-4. for each run $j$, average the observer-frame spectrum over that run's GTIs (time since the
+1. draw a sky position, a distance $d_i$ and a viewing angle $\theta_i$. By default all three come
+   from **one PE posterior sample** (`SKY_DISTANCE_MODE = THETA_MODE = "pe"`,
+   `simulate.sample_sky_distance_angle_pe`), an exact draw from $p(\Omega, d, \theta_v\mid\mathrm{data})$
+   with no density estimate. Samples outside the analysis geometry (or the 95% mask with
+   `restrict_to_mask_3d`) are dropped, which conditions the posterior on the sky support as the
+   skymap route does by renormalising `prob_gw`. The source is injected at the centre of the bin
+   its position falls in. The other options are in §11.3;
+2. take the benchmark jet at $\theta_i$ and project it to $(d_i, z_i)$ with EBL (§9);
+3. for each run $j$, average the observer-frame spectrum over that run's GTIs (time since the
    merger) and fold it through run $j$'s own exposure, PSF and energy dispersion; sum the runs;
-5. scale the result to the trial luminosity $L_k$ (§11.2), then Poisson-fake the counts and
+4. scale the result to the trial luminosity $L_k$ (§11.2), then Poisson-fake the counts and
    compute Λ.
 
 **No temporal template is needed (Step 7).** The analysis is time-integrated, so each run's
 counts depend only on its time-averaged spectrum. Averaging per run and injecting run by run is
 therefore exact. A fading source automatically weights the early runs more.
+
+**The test statistic does not change.** Λ always weights by the skymap $p_{\rm GW}$ the real data
+were analysed with; only the injected population follows the PE.
 
 ### 11.2 What $L_k$ means (`MODEL_NORMALISATION`)
 
@@ -985,31 +808,39 @@ therefore exact. A fading source automatically weights the early runs more.
 
 The choice of angle distribution matters far more under `"anchor"`. Between 0° and 45°, the
 injected flux per unit $L_k$ changes by a factor of about 3.5 with `"gti_mean"` (three synthetic
-20-min runs at 2–4 h, no EBL), but by about six orders of magnitude with `"anchor"`.
+20-min runs at 2–4 h, no EBL), but by about six orders of magnitude with `"anchor"`; the isotropic
+and event-specific medians then differ by seven orders of magnitude, so the choice must be quoted
+with the limit.
 
 ### 11.3 Options and the angle distribution
 
 | Notebook option | Default | Meaning |
 | --- | --- | --- |
 | `model_dir_3d` | `.../grb_afterglow_phenomenological/benchmark` | any `GRBModelSet` cache: a one-sigma variant, or the catO5 set |
-| `theta_dist_path` | `data/gw_input/<alert>_theta_distribution.npz` | the alert's $p(\theta_v\mid d)$ |
+| `SKY_DISTANCE_MODE` | `"pe"` | `"pe"`: one PE sample per realisation (`PE_SOURCE`, `data/gw_pe/standardized/<alert>.h5`); `"skymap"`: a skymap bin and its distance ansatz (§3.4), the same draws as the power-law 3D limit for the same seed |
+| `THETA_MODE` | `"pe"` | see the table below |
+| `theta_dist_path` | `data/gw_input/<alert>_theta_distribution.npz` | the alert's $p(\theta_v\mid d)$, read only for `THETA_MODE = "gw"` |
 | `MODEL_NORMALISATION` | `"gti_mean"` | §11.2 |
 | `EBL_REFERENCE` | `"franceschini17"` | any gammapy EBL model, as used by Abe et al. (2026); `"dominguez"` for Domínguez et al. (2011). The tables ship in `data/ebl/`, which `gwuls.paths` sets as `$GAMMAPY_DATA` if it is unset |
 | `lum_lo_model`, `lum_hi_model` | $10^{42}$, $10^{58}$ erg s⁻¹ | first-batch span, wider than for the power law because EBL removes most of the flux above ~1 TeV |
 
-`EmissionModelInjection.theta_distribution` also accepts the built-in specs `"isotropic"`,
-`"schutz"` and `"fixed:<deg>"` (resolved by `simulate.resolve_theta_distribution`). For an
-event-specific limit, use the alert's PE conditional: it is the measured inclination, and drawing
-it at the same $d_i$ keeps the distance–inclination correlation (§10.3). `"isotropic"` ignores
-both the measurement and the face-on selection of GW detectors, so it is a conservative bracket,
-not the standard case. `"fixed"` gives the limit at a chosen angle, a curve in $\theta_v$ that
-does not depend on the GW inclination. `"schutz"` is the population fallback for alerts without
-PE. The notebook's preview cells load `theta_dist_path` as a saved cache, so use the library
-call directly for the built-in specs. The simulated rounds are cached in `data/tmp/`. The cache
-name includes the model directory, the normalisation, the EBL model, and the modification times
-of the input `.pkl` and of the θ cache, so changing any of them forces a fresh run.
+| `THETA_MODE` | $\theta_i$ | depends on $d_i$? | what the limit means |
+| --- | --- | --- | --- |
+| `"pe"` | the angle of the same PE sample as (sky, $d_i$); needs `SKY_DISTANCE_MODE = "pe"` | yes, exactly | **standard case**: the limit for this event, marginalised over its joint posterior |
+| `"gw"` | $p(\theta_v\mid d_i)$ of the alert (PE KDE, §10) | yes, sky-averaged | cross-check of the KDE; with `"skymap"` distances it carries the bias of §10 |
+| `"fixed"` (`THETA_FIXED_DEG`) | that angle | no | the jet at a given angle; quote a few (0°, 14°, 30°, 45°) as a curve against $\theta_v$ |
+| `"isotropic"` | $\sin\theta_v$ | no | random orientation, no GW information: a conservative bracket, not the standard case |
+| `"schutz"` | Schutz (2011), §10 | no | a typical GW-detected source; fallback without PE |
+| `"two_bin"` (`THETA_TWO_BIN`) | uniform below and above a threshold, mass $p$ below | no | a placeholder, no claim about the shape |
+| `"selection"` (`THETA_HORIZON_MPC`) | detected population with that horizon, given $d_i$ | yes, population-level | GW selection without event information; fallback without PE |
 
-### 11.4 Checks and status
+With `"skymap"` the angle uses its own random stream, so the sky and distance draws do not change
+with `THETA_MODE`. Without released PE only `"skymap"` works. Every cache name of the model limit
+carries the choice (`_skype_thetape`, `_skyskymap_thetafixed-20`, …) and the modification time of
+the PE or $p(\theta_v\mid d)$ file it reads, and the JSON export records `sky_distance_3d_model`,
+`theta_mode_3d_model` and `theta_spec_3d_model`.
+
+### 11.4 Checks
 
 Checks in the notebook, before the fit:
 
@@ -1018,120 +849,33 @@ Checks in the notebook, before the fit:
    the stacked dataset.
 2. **Step 6 closure**: over 2000 draws, the rest-frame GTI-mean luminosity rebuilt from the
    injected spectra (EBL divided out) is $1.00003\,L_k$.
-3. **What is injected**: the drawn angles (5/50/95%: 9.7° / 33° / 57° for S240615dg), where
-   the GTIs fall on the light curve, the run weights, and the EBL transmission at the drawn $z$.
+3. **What is injected**: the drawn angles, where the GTIs fall on the light curve, the run weights,
+   and the EBL transmission at the drawn $z$.
+4. **The draws against the posterior**: for S240615dg, $d$ 5/50/95% = 1121/1564/1850 Mpc and
+   $\theta_v$ = 6.4°/24.5°/51.1°, KS 0.007 and 0.005 against the PE samples in the same sky support,
+   corr$(d,\cos\theta_v)$ 0.824 against 0.823. The skymap route with the PE's $p(\theta_v\mid d)$
+   puts the median angle 8.1° further off-axis (§10).
 
-After the fit, the closure test at $L_k^{\rm UL}$ (§7.6) gives a pull of +0.11σ. It also shows
+After the fit, the closure test at $L_k^{\rm UL}$ (§7.5) gives a pull of +1.06σ. It also shows
 which draws set the limit: the fraction above the target per bin of $\theta_v$ and of $d$.
-=======
-## 11. What is not wired together yet
 
-The 3D limit can now inject the emission model instead of the Γ = 2 power law
-(`simulate.EmissionModelInjection`, notebook section "3D luminosity upper limit with the emission
-model"). The model is the fixed phenomenological benchmark jet of
-`setup_model_phenomenological_fixed.ipynb` (`data/models/grb_afterglow_phenomenological/benchmark/`,
-1° grid in $\theta_v$, read with `get_model(θ, "interp", align_peaks=False)`). Per realisation:
-a sky bin $b$, a distance $d_i$ and a viewing angle $\theta_i$ (by default all three from one PE
-sample; see Steps 4.1–4.3 below), the model at $\theta_i$, and for each run $j$ the observer-frame
-spectrum averaged over that run's GTIs (time since the merger), with EBL at $z_i$. It is folded through
-run $j$'s own exposure, PSF and energy dispersion, and the runs are summed into the stacked dataset
-the TS engine analyses. How the guidelines' steps map onto it:
+### 11.5 Still open
 
-- **Steps 4.1–4.3, sky position, distance and viewing angle (`SKY_DISTANCE_MODE` and `THETA_MODE` in
-  the notebook).** `simulate.sample_injections_3d` draws all three, the same function in production
-  and in the notebook's checks. `EmissionModelInjection.sky_distance` says where (sky, $d_i$) come
-  from, and `theta_distribution` where $\theta_i$ comes from (a built-in spec or a saved
-  `ThetaDistribution` cache, resolved by `simulate.resolve_theta_distribution`):
-
-  | `SKY_DISTANCE_MODE` | (sky, $d_i$) |
-  | --- | --- |
-  | `"pe"` (default) | one PE posterior sample per realisation (`PE_SOURCE`, `data/gw_pe/standardized/<alert>.h5`), via `simulate.sample_sky_distance_angle_pe`. Samples outside the analysis geometry (or the 95% mask with `restrict_to_mask_3d`) are dropped, which conditions the posterior on the sky support as the skymap route does by renormalising `prob_gw` over the map. The source is injected at the centre of the bin its position falls in. |
-  | `"skymap"` | a skymap bin, then $d_i$ from its distance ansatz (§3.4): the same draws as the power-law 3D limit for the same seed |
-
-  | `THETA_MODE` | spec passed | $\theta_i$ | depends on $d_i$? | what the limit means |
-  | --- | --- | --- | --- | --- |
-  | `"pe"` (default) | `"pe"` | the angle of the same PE sample as (sky, $d_i$) | yes, exactly | the limit for this event, marginalised over its joint posterior $p(\Omega, d, \theta_v\mid\mathrm{data})$; needs `SKY_DISTANCE_MODE = "pe"` |
-  | `"gw"` | `data/gw_input/<alert>_theta_distribution.npz` | $p(\theta_v\mid d_i)$ of the alert (PE KDE, §10) | yes, sky-averaged | the previous default; with `"skymap"` distances it carries the bias of §10.7 |
-  | `"fixed"` | `"fixed:<deg>"` (`THETA_FIXED_DEG`) | that angle | no | the benchmark jet seen at that angle |
-  | `"isotropic"` | `"isotropic"` | $\sin\theta_v$, i.e. uniform in $\cos\theta_v$ | no | random orientation, no GW information |
-  | `"schutz"` | `"schutz"` | Schutz (2011), §10.6 | no | a typical GW-*detected* source, no event information |
-  | `"two_bin"` | `"two_bin:<deg>:<p>"` (`THETA_TWO_BIN`) | uniform below and above the threshold, with mass $p$ below | no | a dummy placeholder, no claim about the shape |
-  | `"selection"` | `"selection:<Mpc>"` (`THETA_HORIZON_MPC`) | detected population with that horizon, given $d_i$ | yes, population-level | GW selection without event information |
-
-  With `"skymap"` the angle uses its own random stream, so the sky and distance draws do not change
-  with `THETA_MODE`. With `"pe"`, any `THETA_MODE` other than `"pe"` draws the angle given the PE
-  distance.
-
-  **Which one is the standard case.** For an event-specific limit with released PE, `"pe"` and
-  `"pe"`. The GW data measure the inclination together with the distance and the sky position, and
-  one PE sample carries all three, so the draw is the posterior itself: no density estimate, and
-  neither the skymap–PE distance mismatch (§10.7, +8° for S240615dg) nor the sky dependence of
-  $p(\theta_v\mid d)$ ([`viewing_angle_distribution.md`](viewing_angle_distribution.md) §8.1) can
-  enter. `"isotropic"` is the prior before the detection. It ignores that measurement and the
-  selection of GW detectors toward face-on systems (median 60°, against 24.7° for the S240615dg PE
-  and 36° for Schutz, §10.6), and pairs a GW-informed distance with a GW-blind angle. It is a
-  conservative bracket, not the standard case. "Homogeneous" means uniform on the sphere (in
-  $\cos\theta_v$), not uniform in $\theta_v$. `"fixed"` is the companion presentation: a limit that
-  does not depend on the GW inclination, quoted at a few angles (e.g. 0°, $\theta_\mathrm{core}$ =
-  14°, 30°, 45°) as a curve against $\theta_v$. Without released PE only `"skymap"` is available;
-  `"schutz"` or `"selection"` are then the population fallbacks.
-
-  The test statistic does not change with these options: $\Lambda$ always weights by the skymap
-  $p_{\rm GW}$ the real data were analysed with. With `"pe"` the model limit and the power-law limit
-  no longer share their sky and distance draws, so their ratio also carries the difference between
-  the two distance posteriors.
-
-  How much the choice matters depends on the normalisation. With `"gti_mean"` the angle reaches the
-  limit only through the light-curve shape across the runs: for three synthetic 20-min runs at
-  2–4 h (no EBL), the median injected 1 TeV flux per unit $L_k$ changes by a factor of about 3.5
-  between 0° and 45°.
-  With `"anchor"`, it changes by about six orders of magnitude between the same two angles. The
-  isotropic and event-specific medians then differ by seven orders of magnitude, so the choice must
-  be quoted with the limit.
-
-  Every cache name of the model limit carries the choice (`_skype_thetape`,
-  `_skyskymap_thetafixed-20`, …) and the modification time of the PE or $p(\theta_v\mid d)$ file it
-  reads, and the JSON export records `sky_distance_3d_model`, `theta_mode_3d_model` and
-  `theta_spec_3d_model`.
-- **Step 3, rest-frame band.** `band_rest_TeV`, by default the analysis band taken in the rest frame.
-  The phenomenological spectra are exact power laws, so evaluating them outside the tabulated
-  1 GeV–10 TeV is exact. For the catO5 files it would be an extrapolation.
-- **Step 6, normalisation over the GTIs.** `normalisation="gti_mean"`:
-
-$$
-\text{injected}_i = \frac{L_k}{D_i}\,F_i,\qquad
-D_i=\frac{1}{T_{\rm obs}}\sum_j\int_{t_{1j}}^{t_{2j}}\!\int_{E'_0}^{E'_1}E'\,L\big(E',\,t/(1+z_i);\theta_i\big)\,dE'\,dt .
-$$
-
-  The alternative `"anchor"` scales the model by $L_k$ over its own on-axis $L_\mathrm{TeV}$ at
-  $t'=11$ h instead, so the viewing angle and the observation time reach the limit too. $D_i$ is never
-  zero for the power-law light curves of these models; GTIs past the model's time grid
-  ($t'>10^7$ s) are extrapolated as a power law.
-- **Step 7, no temporal template.** The analysis is time-integrated, so each run's counts depend only
-  on its time-averaged spectrum. Averaging the model over each run's GTIs and injecting run by run is
-  therefore exact, and needs neither `LightCurveTemplateTemporalModel` nor `MapDatasetEventSampler`.
-  For a constant source it reproduces the stacked injection (checked in the notebook).
-- **Step 8, the statistic.** Unchanged: $\Lambda$ (§4.3). The per-position alternative
-
-$$
-P_{\rm excl}(L_k)=\frac1N\sum_i\mathbf{1}\big[\mathrm{TS}_i(L_k)>\mathrm{TS}_{\rm obs}(\mathrm{RA}_i,\mathrm{Dec}_i)\big]
-$$
-
-  is not implemented. The same coverage cap as §7.2 would apply.
->>>>>>> 59ef1f28b079adf81d9b3468b9f3b8d00d5f45ae
-
-Still open:
-
-- **Joint PE draw.** Drawing (RA, Dec, $d$, $\theta$) together from PE (§10.7) is not wired in.
-  For S240615dg the skymap–PE distance mismatch moves the angles about 8° off-axis.
-- **One fixed jet.** The variant caches can be used through `model_dir_3d`, but neither a loop
-  over them nor a per-realisation bank member is implemented
-  ([`phenomenological_model.md`](phenomenological_model.md) §7).
+- **Convergence.** All three S240615dg limits stopped on the 6000-realisation budget
+  (`converged = False`) at a 1σ half-width of 0.013–0.036 dex instead of 0.01. Raise
+  `ul_max_sims`, or quote the wider interval.
+- **Trials-factor check** (§7.6): the global 2D limit is 17% below the largest per-pixel UL in the
+  95% region. Compare against a GW-weighted quantile of the per-pixel ULs before quoting.
+- **Power-law 3D limit still uses the skymap.** Only the emission-model limit draws from the PE,
+  so the model / power-law ratio also carries the difference between the two distance posteriors.
+- **One fixed jet.** The one-sigma variant caches can be used through `model_dir_3d`, but no loop
+  over them, nor a per-realisation population draw, is implemented
+  ([`emission_model.md`](emission_model.md) §5.3).
 - **Per-position statistic.** The guidelines' Step 8 alternative,
   $P_{\rm excl}(L_k)=\frac1N\sum_i\mathbf{1}[\mathrm{TS}_i(L_k)>\mathrm{TS}_{\rm obs}(\mathrm{RA}_i,\mathrm{Dec}_i)]$,
-  is not implemented. Λ is used for every limit.
+  is not implemented. Λ is used for every limit; the same coverage cap as §7.2 would apply.
 - **Source class.** S240615dg is a binary black hole. The limit demonstrates the method, not a
-  physical expectation.
+  physical expectation. S241125n (also a BBH) has standardized PE but has not been run.
 
 ---
 
@@ -1139,51 +883,29 @@ Still open:
 
 | Check | Where | Guards against | Last recorded result |
 | --- | --- | --- | --- |
-| Band integrals vs quadrature and gammapy; round trips; Γ = 2 limit from both sides; K = 1 at Γ = 2; $L\propto d^2$ | `simulate.check_spectral_conversions` (`--self-test`) | the Γ = 2 singularity, unit errors | passes (run in notebook) |
+| Band integrals vs quadrature and gammapy; round trips; Γ = 2 limit from both sides; K = 1 at Γ = 2; $L\propto d^2$ | `simulate.check_spectral_conversions` | the Γ = 2 singularity, unit errors | passes (run in notebook) |
 | Input `.pkl` validation: shapes, empty mask, κ range, CDF transposed / non-monotonic / truncated | `simulate.validate_simulation_input` | silent failures thousands of iterations later | runs at `.pkl` write and at every load |
 | HEALPix → WCS assignment separation < 1.5 bin diagonals | `_map_healpix_to_wcs_bins` | RA-convention errors | printed per run |
 | 3D sampler: χ² sky marginal, KS distance marginal, hottest-bin conditional, no $d\le0$, grid-edge probability atoms | `simulate.check_3d_sampling` | the production sampler drifting from the posterior | S240615dg: χ²/dof 855/849 (p = 0.43), KS p = 0.62, 0 draws at $d\le0$: pass |
 | Background Λ split-half medians; binomial p-value error | notebook Part 2 | an unstable null distribution | S240615dg: −4.062 / −4.080 |
 | Upper-limit fit: bracket check after the scout, goodness of fit, profile-likelihood interval | `_fit_ul`, `plotting.plot_ul_fit` | a limit outside the bracket, a curve the probit misdescribes | per run |
 | Upper-limit fit: bias and coverage on synthetic curves of known limit, including non-probit shapes and a ceiling below 1 | §7.3 | a biased limit, an uncertainty that does not cover | 200 fits per curve: unbiased to 0.16σ with nominal coverage when the curve reaches 1; ~0.5σ high and under-covering when it saturates below 1 (§7.3) |
-| Bisection: bracket check, MC-aware tolerance, monotonicity, edge flag | `_bisect_ul` | meaningless limits at a bracket edge | per run |
-| Closure test at $L_0^{\rm UL}$ and $L_k^{\rm UL}$ with independent seeds | notebook, `closure_pull` | a biased limit | pull < 3σ required; S240615dg: +1.36σ (power law), +0.11σ (model) |
-| Global UL ≥ per-pixel sky-map UL | notebook | a missing trials factor, wrong κ | S240615dg: global 17% **below** the 95%-region maximum, open (§7.7) |
-| Model round trip Step 2 → Step 7 | `setup_model` | frame or $(1+z)$ power errors | max relative error 0 |
-| Peak-aligned interpolation single-peaked; rescale ∘ interpolate commute | `setup_model` | double peaks, $E_{\rm iso}$ inconsistency | 0 of 398 angles multi-peaked; 1.7 × 10⁻¹³ dex |
-| Standardised PE vs full raw posterior; fold vs pesummary `viewing_angle` | `setup_angle_distribution` Part 0 | subsampling bias | 5/50/95% quantiles within ~1°; fold exact |
+| Closure test at $L_0^{\rm UL}$ and $L_k^{\rm UL}$ with independent seeds | notebook, `closure_pull` | a biased limit | pull < 3σ required; S240615dg: +1.36σ (power law), +1.06σ (model) |
+| Global UL ≥ per-pixel sky-map UL | notebook | a missing trials factor, wrong κ | S240615dg: global 17% **below** the 95%-region maximum, open (§7.6) |
+| Model round trip Step 2 → Step 7 on the catO5 files | `extra/catO5_models` | frame or $(1+z)$ power errors | max relative error 0 |
+| Standardised PE vs full raw posterior; fold vs pesummary `viewing_angle` | `2_gw_viewing_angle` Part 0 | subsampling bias | 5/50/95% quantiles within ~1°; fold exact |
 | KDE marginals vs samples; grid $p(\theta\mid d)$ vs grid-free resampling; bandwidth ×0.5 and ×2 | Part 1 | over- or under-smoothing | grid vs resampling medians within 0.5°; bandwidth moves medians by ≤ 1.5° |
 | Three sampling routes reproduce the posterior (quantiles, correlation, KS) | Part 1 | sampler bugs | KS ≤ 0.016 |
 | Each option's sampler vs its own pdf | Part 2 | sampler bugs | at $1/\sqrt n$ level |
 | Schutz vs Monte-Carlo selection model | Part 2 | a wrong closed form | max CDF difference 0.009 |
-<<<<<<< HEAD
-| `resolve_theta_distribution` for a cache path and every built-in spec; malformed `"fixed:…"` rejected at construction | §11.3, Step 4.3 | a silently wrong angle draw | medians: fixed 20°, isotropic 60.2°, Schutz 36.4°, S240615dg PE given $d$ = 1400 Mpc 33.9° |
+| `resolve_theta_distribution` for every `THETA_MODE`; malformed `"fixed:…"`, `"two_bin:…"`, `"selection:…"` and `THETA_MODE = "pe"` without PE sky/distance rejected at construction | §11.3, Step 4.3 | a silently wrong angle draw | medians: fixed 20°, isotropic 60.2°, Schutz 36.4°, S240615dg PE given $d$ = 1400 Mpc 33.9° |
+| Joint PE draw: bin of every sample vs nearest bin centre; drawn $d$, $\theta_v$ and corr$(d, \cos\theta_v)$ vs the PE samples in the sky support; skymap route alongside | `sample_sky_distance_angle_pe`; notebook crosscheck (4) | a wrong bin, a biased resampling | S240615dg: 98.4% of samples in the geometry; KS 0.007 ($d$), 0.005 ($\theta_v$); corr 0.824 vs 0.823; skymap route +8.1° in the $\theta_v$ median |
 | Emission model: run-by-run injection = stacked for a constant source; Step 6 closure of $L_k$ | §11.4 | wrong per-run folding or normalisation | −0.41%; 1.00003 |
-| Benchmark jet: on-axis vs 1-D calculation, grid convergence, shape fits to catO5 | `setup_model_phenomenological_fixed` | a wrong off-axis integral | catO5 shapes to 0.09–0.25 dex ([`phenomenological_model.md`](phenomenological_model.md) §6) |
-=======
-| `resolve_theta_distribution` for every `THETA_MODE`; malformed `"fixed:…"`, `"two_bin:…"`, `"selection:…"` and `THETA_MODE = "pe"` without PE sky/distance rejected at construction | §11, Step 4.3 | a silently wrong angle draw | medians: fixed 20°, isotropic 60.2°, Schutz 36.4°, S240615dg PE given $d$ = 1400 Mpc 33.9° |
-| Joint PE draw: bin of every sample vs nearest bin centre; drawn $d$, $\theta_v$ and corr$(d, \cos\theta_v)$ vs the PE samples in the sky support; skymap route alongside | `sample_sky_distance_angle_pe`; notebook crosscheck (4) | a wrong bin, a biased resampling | S240615dg: 98.4% of samples in the geometry, all within half a bin diagonal of their bin centre; KS 0.004 ($d$), 0.005 ($\theta_v$); corr 0.825 vs 0.823; skymap route +8° in the $\theta_v$ median |
->>>>>>> 59ef1f28b079adf81d9b3468b9f3b8d00d5f45ae
+| Benchmark jet: on-axis vs 1-D calculation, grid convergence, shape fits to catO5, angle interpolation vs direct build | `1_grb_model` | a wrong off-axis integral or interpolation | 0.0018 dex; catO5 shapes to 0.09–0.25 dex; interp ≤ 0.045 dex ([`emission_model.md`](emission_model.md) §5.4) |
 
 ---
 
-## 13. Historical notebooks (removed)
-
-These predated the `gwuls` package, were not runnable as they were, and have been removed from
-the tree (retrievable from git history at `notebooks/others/` in earlier commits). Kept here for
-the physics context.
-
-| Notebook | What it did | Physics purpose |
-| --- | --- | --- |
-| `check_1_simulation.ipynb` | Built simulated datasets from the real IRFs and background; compared real minus simulated counts, and source minus null | validate that `fake()` on the real-IRF dataset reproduces the real data |
-| `delta.ipynb` / `delta_he.ipynb` | Full 2D pipeline with the GW map collapsed to its hottest pixel (Dirac delta); LST mono 0.15–0.6 TeV (`baccmod`) and LST+MAGIC stereo 0.6–20 TeV (`pybkgmodel`) | closure test: with no trials, the MC ("frequentist") UL must match gammapy's per-pixel UL |
-| `results_delta.ipynb` | Hand-entered results of those runs; percentage difference vs significance, pixel size and containment radius | quantified the agreement of the two UL methods |
-| `check_energy_dependence.ipynb` | Hand-entered MC UL vs sky-map-maximum UL (95% region and full map) across energy bands, mono vs stereo | size of the trials penalty per band |
-| `test_sim_flux.ipynb` | Earliest 2D flux pipeline: Slurm grid, sigmoid or linear crossing | superseded by `simulate.run_iterative_ul` |
-
----
-
-## 14. References
+## 13. References
 
 **Statistics and data analysis**
 
@@ -1211,33 +933,26 @@ the physics context.
   [arXiv:1603.07333](https://arxiv.org/abs/1603.07333): the per-pixel distance ansatz (§3.1).
 - L. S. Finn and D. F. Chernoff, *Observing binary inspiral in gravitational radiation: one
   interferometer*, PRD **47**, 2198 (1993), [arXiv:gr-qc/9301003](https://arxiv.org/abs/gr-qc/9301003):
-  the orientation factor Θ (§10.3).
+  the orientation factor Θ (§10).
 - B. F. Schutz, *Networks of gravitational wave detectors and three figures of merit*, CQG **28**,
   125023 (2011), [arXiv:1102.5421](https://arxiv.org/abs/1102.5421): inclination distribution of
-  GW-detected binaries (§10.6).
-- LVK, GWTC-5.0 parameter-estimation data release (Zenodo): the PE samples of §10.4.
+  GW-detected binaries (§10).
+- LVK, GWTC-5.0 parameter-estimation data release (Zenodo): the PE samples of §10.
 
 **Emission model and propagation**
 
 - H. Abe et al. (CTAO Consortium), *Chasing gamma-ray signals from binary neutron star
   coalescences with the Cherenkov Telescope Array: prospects and observing strategies*, ApJ
   **1004**, 46 (2026), [arXiv:2604.08748](https://arxiv.org/abs/2604.08748): the phenomenological
-  recipe and its off-axis method (§9.3).
+  recipe and its off-axis method (§9).
 - L. Nava, *TeV counterparts of BNS mergers*, internal note (Jan 2020): the original recipe.
 - G. P. Lamb and S. Kobayashi, *Low-Γ jets from compact stellar mergers*, MNRAS **472**, 4953
   (2017), [arXiv:1706.03000](https://arxiv.org/abs/1706.03000): the off-axis element integral.
 - E. Berger, *Short-duration gamma-ray bursts*, ARA&A **52**, 43 (2014),
   [arXiv:1311.2603](https://arxiv.org/abs/1311.2603): the $L_X$–$E_\mathrm{iso}$ relation.
-- R. D. Blandford and C. F. McKee, *Fluid dynamics of relativistic blast waves*, Phys. Fluids
-  **19**, 1130 (1976), [doi:10.1063/1.861619](https://doi.org/10.1063/1.861619).
-- R. Sari, T. Piran and R. Narayan, *Spectra and light curves of gamma-ray burst afterglows*, ApJL
-  **497**, L17 (1998), [arXiv:astro-ph/9712005](https://arxiv.org/abs/astro-ph/9712005).
-- H. J. van Eerten and A. I. MacFadyen, *Gamma-ray burst afterglow scaling relations for the full
-  blast wave evolution*, ApJL **747**, L30 (2012), [arXiv:1111.3355](https://arxiv.org/abs/1111.3355):
-  the $E_\mathrm{iso}$ rescaling of the catO5 files (§9.4).
 - A. Franceschini and G. Rodighiero, *The extragalactic background light revisited and the
   cosmic photon-photon opacity*, A&A **603**, A34 (2017),
-  [arXiv:1705.10256](https://arxiv.org/abs/1705.10256): the EBL model used by `sim_3d`.
+  [arXiv:1705.10256](https://arxiv.org/abs/1705.10256): the EBL model of the emission-model limit.
 - A. Domínguez et al., *Extragalactic background light inferred from AEGIS galaxy-SED-type
   fractions*, MNRAS **410**, 2556 (2011), [arXiv:1007.1459](https://arxiv.org/abs/1007.1459): the
   EBL model of §5.4 and the `grb_model` default.

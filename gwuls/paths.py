@@ -8,7 +8,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = REPO_ROOT / "data"
 GW_INPUT_DIR = DATA_DIR / "gw_input"
 TMP_DIR = DATA_DIR / "tmp"
-SLURM_OUTPUT_DIR = DATA_DIR / "slurm_output"
 
 # EBL tables (gwuls.grb_model.ebl_transmission, Step 7): gammapy only needs an
 # ebl/ subdirectory to find its built-in absorption models, so data/ebl/ (a few
@@ -17,17 +16,17 @@ SLURM_OUTPUT_DIR = DATA_DIR / "slurm_output"
 EBL_DIR = DATA_DIR / "ebl"
 os.environ.setdefault("GAMMAPY_DATA", str(DATA_DIR))
 
-# Emission models (setup_model.ipynb): raw = as delivered (e.g. INAF catO5_*.fits),
+# Emission models (extra/catO5_models.ipynb): raw = as delivered (e.g. INAF catO5_*.fits),
 # standardized = gwuls.grb_model's own .npz cache (Steps 1-2 of the simulation
-# guidelines), which is what sim_3d actually loads -- it never touches a raw file.
+# guidelines), which is what 3_upper_limits actually loads -- it never touches a raw file.
 MODELS_DIR = DATA_DIR / "models"
 GRB_MODEL_RAW_DIR = MODELS_DIR / "grb_afterglow_inaf" / "raw"
 GRB_MODEL_STANDARDIZED_DIR = MODELS_DIR / "grb_afterglow_inaf" / "standardized"
-# The fixed phenomenological model (setup_model_phenomenological_fixed.ipynb): one
+# The fixed phenomenological model (1_grb_model.ipynb): one
 # directory per jet (benchmark/, theta_core_lo/, ...), same .npz format as the one above.
 GRB_MODEL_PHENOMENOLOGICAL_DIR = MODELS_DIR / "grb_afterglow_phenomenological"
 
-# GW parameter estimation (setup_angle_distribution.ipynb): raw = the full GWTC
+# GW parameter estimation (2_gw_viewing_angle.ipynb): raw = the full GWTC
 # "combined_PEDataRelease.hdf5" files + PESummaryTable as downloaded (gitignored,
 # GBs), standardized = gwuls.gw_pe's light per-alert file, <superevent>.h5, plus
 # index.csv listing every alert with released PE -- both tracked in git.
@@ -47,7 +46,7 @@ LST_REAL_DATA_DIR = Path(os.environ.get(
 
 def ensure_dirs() -> None:
     """Create every standard directory (input/scratch/output) if missing."""
-    for d in (GW_INPUT_DIR, TMP_DIR, SLURM_OUTPUT_DIR, PLOTS_DIR, RESULTS_DIR,
+    for d in (GW_INPUT_DIR, TMP_DIR, PLOTS_DIR, RESULTS_DIR,
               GRB_MODEL_RAW_DIR, GRB_MODEL_STANDARDIZED_DIR,
               GW_PE_RAW_DIR, GW_PE_STANDARDIZED_DIR):
         d.mkdir(parents=True, exist_ok=True)
@@ -62,7 +61,7 @@ def gw_pe_path(superevent_id: str) -> Path:
 
 def theta_distribution_path(source_name: str) -> Path:
     """The standardized viewing-angle-distribution cache for one GW source
-    (setup_angle_distribution.ipynb writes it, sim_3d reads it) -- see
+    (2_gw_viewing_angle.ipynb writes it, 3_upper_limits reads it) -- see
     gwuls.angle_distribution.save_theta_distribution/load_theta_distribution."""
     return GW_INPUT_DIR / f"{source_name}_theta_distribution.npz"
 
@@ -78,10 +77,8 @@ def run_stem(source_name, type_obs, e_min, e_max, bkg_type, correlation_radius, 
     """
     The filename stem shared by every cache/result file for one run configuration.
 
-    The single place this is built -- every notebook cell that names a per-run
-    cache or result file (BKG results, grid results, grid/iterative caches)
-    appends its own suffix to this instead of re-deriving the stem by hand,
-    which is what let the BKG and grid filename conventions drift apart.
+    The single place this is built: every notebook cell that names a per-run
+    cache or result file appends its own suffix to this.
     """
     dirac = "_isdirac" if use_dirac_delta else ""
     return (f"{source_name}_{type_obs}_E{e_min}_{e_max}_bkg{bkg_type}"

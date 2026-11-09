@@ -4,71 +4,12 @@ import os
 
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm
 from matplotlib.patches import Circle
 import astropy.units as u
 from matplotlib.gridspec import GridSpec
 from scipy.stats import norm
 
 from .utils import trapz as _trapz
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-def _plot_convergence_ax(
-    ax, history_amp, history_frac, amp_lo, amp_hi, amp_final, cl, precision
-):
-    """Shared convergence plot — fraction vs iteration."""
-    ax.plot(range(1, len(history_frac)+1), history_frac, "ko-", ms=5, zorder=5)
-    ax.axhline(cl, color="r", ls="--", lw=1.5, label=f"CL={cl}")
-    ax.axhspan(cl - cl*precision, cl + cl*precision, alpha=0.15, color="r")
-    ax.set_xlabel("Iteration"); ax.set_ylabel("Fraction > target")
-    ax.set_xticks(range(1, len(history_frac)+1))
-    for k, (a, f) in enumerate(zip(history_amp, history_frac)):
-        ax.annotate(
-            f"{a:.1e}", (k+1, f), textcoords="offset points", xytext=(0, 8),
-            fontsize=6, ha="center"
-        )
-    ax.set_title(f"UL={amp_final:.2e}")
-    ax.legend(frameon=False, fontsize=8)
-
-
-# ---------------------------------------------------------------------------
-# UL iteration plot
-# ---------------------------------------------------------------------------
-
-def plot_ul_iteration(
-    ax1, ax2, lambda_bkg, lambda_iter, lambda_real, lambda_bkg_m, target,
-    history_amp, history_frac, amp_mid, amp_lo, amp_hi, frac, cl,
-    p_value, significance, iteration, max_iter, energy_edges, precision
-):
-    lmin = min(lambda_bkg.min(), lambda_iter.min())
-    lmax = max(lambda_bkg.max(), lambda_iter.max())
-    bins = np.linspace(lmin - 0.1*abs(lmin), lmax + 0.1*abs(lmax), 60)
-
-    ax1.hist(
-        lambda_bkg, bins, color="royalblue", density=True, histtype="stepfilled",
-        alpha=0.7, label=f"BKG N={len(lambda_bkg)}"
-    )
-    ax1.hist(
-        lambda_iter, bins, color="k", density=True, histtype="step", lw=1.5,
-        label=f"iter {iteration+1}  Amp={amp_mid:.2e}  N={len(lambda_iter)}"
-    )
-    ax1.axvline(target, color="r", ls="-", lw=2, label=f"Target={lambda_real:.2f}")
-    ax1.text(
-        0.97, 0.95,
-        f"frac={frac:.3f}  CL={cl}\np-val={p_value:.3f}  sig={significance:.2f}$\\sigma$",
-        ha="right", va="top", transform=ax1.transAxes, fontsize=7
-    )
-    ax1.set(xlabel="$\\Lambda$", ylabel="Normalized counts")
-    ax1.set_title(f"Iter {iteration+1}/{max_iter} - [{amp_lo:.1e}, {amp_hi:.1e}]")
-    ax1.legend(frameon=False, fontsize=7, loc=2)
-
-    _plot_convergence_ax(
-        ax2, history_amp, history_frac, amp_lo, amp_hi, np.sqrt(amp_lo*amp_hi), cl, precision
-    )
-
 
 # ---------------------------------------------------------------------------
 # Summary plots
@@ -139,7 +80,6 @@ def summary_maps(
 
 def summary_gw_map(geom, bin_edges_ra, bin_edges_dec, prob_gw):
     fig, ax = plt.subplots(figsize=(2.4, 2), subplot_kw={"projection": geom.wcs})
-    trans   = ax.get_transform("icrs")
 
     pc = ax.pcolormesh(
         bin_edges_ra, bin_edges_dec, prob_gw, cmap="cylon",
@@ -619,61 +559,8 @@ def animate_bkg_simulations(
 
 
 # ---------------------------------------------------------------------------
-# Iterative upper-limit diagnostics (shared by the 2D and 3D bisections)
+# Upper-limit fit diagnostics
 # ---------------------------------------------------------------------------
-
-def plot_ul_convergence(hist_x, hist_frac, hist_err, x_ul, cl, x_ul_lo_1sigma=None,
-                        x_ul_hi_1sigma=None, label="\\phi_0", unit="cm$^{-2}$s$^{-1}$TeV$^{-1}$",
-                        method_label="2D", converged=None, bracket_width_dex=None,
-                        n_monotonicity_violations=0, at_bracket_edge=False,
-                        bracket_warning=None):
-    """
-    Two-panel bisection diagnostic, shared by the 2D flux and 3D luminosity
-    upper limits: the convergence trace (fraction and tested x per
-    iteration) and the crossing curve that actually defines the limit.
-    """
-    hist_x   = np.asarray(hist_x)
-    hist_frac = np.asarray(hist_frac)
-    hist_err  = np.zeros_like(hist_frac) if hist_err is None else np.asarray(hist_err)
-    iters = np.arange(1, len(hist_frac) + 1)
-
-    fig, (axL, axR) = plt.subplots(1, 2, figsize=(5.1, 3.8))
-
-    ax2 = axL.twinx()
-    ax2.plot(iters, hist_x, color="steelblue", ls="--", marker="s", label=f"${label}$")
-    ax2.set_ylabel(f"Tested ${label}$ [{unit}]", color="steelblue")
-    ax2.tick_params(axis="y", labelcolor="steelblue"); ax2.set_yscale("log")
-
-    axL.errorbar(iters, hist_frac, yerr=hist_err, fmt="ko-",
-                 label="Fraction $\\pm$ MC error")
-    axL.axhline(cl, color="r", ls="--", label=f"CL = {cl}")
-    axL.set_xlabel("Iteration"); axL.set_ylabel("Fraction > target")
-    axL.set_xticks(list(iters))
-    axL.set_title(f"{method_label} convergence - ${label}^{{UL}}$ = {x_ul:.3e}")
-    axL.set_zorder(ax2.get_zorder() + 1); axL.patch.set_visible(False)
-    l1, lab1 = axL.get_legend_handles_labels(); l2, lab2 = ax2.get_legend_handles_labels()
-    axL.legend(l1 + l2, lab1 + lab2)
-
-    order = np.argsort(hist_x)
-    axR.errorbar(hist_x[order], hist_frac[order], yerr=hist_err[order], fmt="o-",
-                 color="k", label="simulated")
-    axR.axhline(cl, color="r", ls="--", label=f"CL = {cl}")
-    axR.axvline(x_ul, color="g", label=f"UL = {x_ul:.3e}")
-    if x_ul_lo_1sigma is not None and np.isfinite(x_ul_lo_1sigma):
-        axR.axvspan(x_ul_lo_1sigma, x_ul_hi_1sigma, color="g", alpha=0.15, label="MC 1$\\sigma$")
-    axR.set_xscale("log"); axR.set_xlabel(f"${label}$ [{unit}]")
-    axR.set_ylabel("Fraction > target"); axR.set_ylim(-0.03, 1.03)
-    axR.set_title("Crossing curve"); axR.legend(loc="upper left")
-
-    fig.tight_layout(); plt.show()
-
-    if converged is not None:
-        print(f"Converged: {converged}   bracket width {bracket_width_dex:.4f} dex   "
-              f"monotonicity violations: {n_monotonicity_violations}")
-        if bracket_warning:
-            print(f"BRACKET PROBLEM: {bracket_warning}")
-        if at_bracket_edge:
-            print(f"WARNING: the limit sits at the edge of the tested {label} range.")
 
 
 _C_FIT, _C_BAND, _C_UL, _C_CL, _C_SCOUT = "#184f95", "#3987e5", "#1a7f37", "#c0392b", "#a8a79f"
@@ -829,50 +716,6 @@ def plot_ul_fit(result, label="\\phi_0", unit="cm$^{-2}$s$^{-1}$TeV$^{-1}$", met
         print("WARNING: the probit does not describe the realisations in the fit window (p < 0.01).")
 
 
-def plot_lambda_distributions_by_x(lambda_bkg, lambda_real, lambda_bkg_m,
-                                   lambda_cache_by_x, target_lambda, cl,
-                                   x_label="L_0", x_unit="erg s$^{-1}$"):
-    """
-    Lambda distribution for every x (amplitude or luminosity) tested during
-    a bisection, colour-coded by x, against the BKG distribution -- plus the
-    frac(x) table used to check that the tested values straddle the target
-    and that the median Lambda grows monotonically with x.
-    """
-    xs_tested = np.array(sorted(lambda_cache_by_x.keys()))
-    all_l = np.concatenate(
-        [lambda_bkg, [lambda_real, lambda_bkg_m]] + [lambda_cache_by_x[x] for x in xs_tested])
-    bins_all = np.linspace(np.nanmin(all_l), np.nanmax(all_l), 60)
-
-    fig, ax = plt.subplots(figsize=(7.5, 4.2))
-    ax.hist(lambda_bkg, bins_all, density=True, histtype="stepfilled",
-            color="0.85", label=f"BKG sim (N={len(lambda_bkg)})", zorder=-10)
-
-    cmap = plt.cm.plasma
-    lognorm_c = plt.Normalize(np.log10(xs_tested.min()), np.log10(xs_tested.max()))
-    for x in xs_tested:
-        ax.hist(lambda_cache_by_x[x], bins_all, density=True, histtype="step",
-                color=cmap(lognorm_c(np.log10(x))), lw=1.3, alpha=0.9)
-
-    ax.axvline(lambda_real,  color="k",        ls="--", label=f"Real data  $\\Lambda$={lambda_real:.2f}")
-    ax.axvline(lambda_bkg_m, color="darkblue", ls=":",  label=f"BKG median  $\\Lambda$={lambda_bkg_m:.2f}")
-    sm = plt.cm.ScalarMappable(cmap=cmap, norm=lognorm_c)
-    cbar = fig.colorbar(sm, ax=ax); cbar.set_label(f"$\\log_{{10}}({x_label}$ / {x_unit})")
-    ax.legend(frameon=False, fontsize=8)
-    ax.set_xlabel("$\\Lambda$"); ax.set_ylabel("Normalized counts")
-    ax.set_title(f"$\\Lambda$ distributions for every ${x_label}$ probed ({len(xs_tested)} steps)")
-    plt.tight_layout(); plt.show()
-
-    fracs = np.array([np.mean(lambda_cache_by_x[x] > target_lambda) for x in xs_tested])
-    meds  = np.array([np.median(lambda_cache_by_x[x]) for x in xs_tested])
-    print(f"{x_label} [{x_unit}]        frac > target   median Lambda")
-    for x, f, m in zip(xs_tested, fracs, meds):
-        print(f"  {x:.4e}      {f:6.3f}        {m:8.3f}")
-    print(f"\nTarget Lambda = {target_lambda:.3f}")
-    print(f"Tested {x_label} straddle the CL: {fracs.min() <= cl <= fracs.max()}")
-    print(f"Median Lambda monotonic in {x_label}: "
-          f"{bool(np.all(np.diff(meds) >= -0.05 * np.abs(meds[:-1]).max()))}")
-
-
 def plot_closure_test(lambda_bkg, lambda_clo, target_lambda, frac_clo, err_clo, cl,
                       d_clo, photon_flux_clo, flux_ul_value, x_label="L_0"):
     """
@@ -992,17 +835,14 @@ def plot_uls_summary(r_grid, pdf_marg, d_q, lum2, flx3, flx2, lum3, lum3_1sigma,
             (result_2d, "hist_amp", amp_ul, "crimson", "o", "2D ($\\phi_0/\\phi_0^{UL}$)"),
             (result_3d, "hist_lum", lum_ul, "seagreen", "s", "3D ($L_0/L_0^{UL}$)")):
         _x = np.asarray(res[xs_key]); _f = np.asarray(res["hist_frac"]); _o = np.argsort(_x)
-        if "curve" in res:          # curve fit: binned realisations, fitted curve and its band
-            c = res["curve"]
-            w = (c["x"] >= res["fit_window"][0]) & (c["x"] <= res["fit_window"][1])
-            if "p_lo_1sigma" in c:
-                ax.fill_between(c["x"][w] / ul, c["p_lo_1sigma"][w], c["p_hi_1sigma"][w],
-                                color=color, alpha=0.25, lw=0)
-            ax.plot(c["x"][w] / ul, c["p"][w], color=color, lw=1.4, label=lab)
-            ax.errorbar(_x[_o] / ul, _f[_o], yerr=np.asarray(res["hist_err"])[_o], fmt=marker,
-                        color=color, ms=3, lw=0.8, alpha=0.8)
-        else:                       # bisection: the tested points, joined
-            ax.plot(_x[_o] / ul, _f[_o], marker + "-", color=color, ms=4, lw=1.2, label=lab)
+        c = res["curve"]            # binned realisations, fitted curve and its band
+        w = (c["x"] >= res["fit_window"][0]) & (c["x"] <= res["fit_window"][1])
+        if "p_lo_1sigma" in c:
+            ax.fill_between(c["x"][w] / ul, c["p_lo_1sigma"][w], c["p_hi_1sigma"][w],
+                            color=color, alpha=0.25, lw=0)
+        ax.plot(c["x"][w] / ul, c["p"][w], color=color, lw=1.4, label=lab)
+        ax.errorbar(_x[_o] / ul, _f[_o], yerr=np.asarray(res["hist_err"])[_o], fmt=marker,
+                    color=color, ms=3, lw=0.8, alpha=0.8)
     ax.axhline(confidence_level, color="k", ls="--", lw=1.2)
     ax.axvline(1.0, color="k", ls=":", lw=1.2)
     ax.set_xscale("log"); ax.set_xlabel("injected / UL"); ax.set_ylabel("fraction > target")
@@ -1014,70 +854,9 @@ def plot_uls_summary(r_grid, pdf_marg, d_q, lum2, flx3, flx2, lum3, lum3_1sigma,
     plt.show()
 
 
-# ---------------------------------------------------------------------------
-# Grid-scan (USE_ITERATIVE_ULS = False) diagnostics
-# ---------------------------------------------------------------------------
-
-def plot_grid_lambda_heatmap(lambda_bins, amplitude_edges, lambda_hist_f,
-                             lambda_hist_bkg, energy_edges):
-    fig, (ax1, ax2) = plt.subplots(
-        2, 1, figsize=(7, 4), gridspec_kw={"height_ratios": [6, 1]}, sharex=True)
-    ax1.pcolormesh(lambda_bins, amplitude_edges, lambda_hist_f, norm=LogNorm(), cmap="plasma")
-    ax2.pcolormesh(lambda_bins, [0, 1], [lambda_hist_bkg], norm=LogNorm(), cmap="viridis")
-    for ax in (ax1, ax2):
-        ax.set_facecolor("k")
-    ax1.set_ylim(1e-13, 7e-11); ax1.set_yscale("log"); ax2.set_yticks([])
-    ax2.set_ylabel("BKG"); ax2.set_xlabel("$\\Lambda$")
-    ax1.set_ylabel("$\\phi_0$ [cm${}^{-2}$s${}^{-1}$ TeV${}^{-1}$]")
-    ax1.set_title(f"{energy_edges[0]:.2f}-{energy_edges[1]:.2f}")
-    plt.subplots_adjust(wspace=0, hspace=0)
-    plt.show()
-
-
-def plot_grid_crossing_curve(amplitudes, lambda_f_frac_bkg, lambda_f_frac_real,
-                             amplitude95_bkg, amplitude95_real, confidence_level,
-                             energy_edges):
-    fig, ax = plt.subplots(1, 1, figsize=(5.4, 3))
-    ax.plot(amplitudes, lambda_f_frac_bkg,  color="k", label="$\\Lambda>\\Lambda_{bkg}$")
-    ax.plot(amplitudes, lambda_f_frac_real, color="r", label="$\\Lambda>\\Lambda_{real}$")
-    ax.axvline(amplitude95_bkg,  color="k", ls="--")
-    ax.axvline(amplitude95_real, color="r", ls="--")
-    ax.axhline(confidence_level, ls=":", color="lightgray", zorder=-2,
-              label=f"C.L. = {confidence_level}")
-    ax.legend(frameon=False)
-    ax.set_xlabel("$\\phi_0$ [cm${}^{-2}$s${}^{-1}$ TeV${}^{-1}$]")
-    ax.set_ylabel("Fraction of events")
-    ax.set_title(f"{energy_edges[0]:.2f}-{energy_edges[1]:.2f}")
-    ax.set_xlim(1e-13, 5e-11); ax.set_xscale("log")
-    plt.show()
-
-
-def plot_grid_threshold_case(lambda_bkg, lambda_bins, lambda_f_at_ul, lambda_bins_ext,
-                             lambda_real, lambda_bkg_m, p_value, significance,
-                             flux_sim, energy_edges):
-    fig, axt = plt.subplots(1, 1, figsize=(7, 3))
-    axt.hist(lambda_bkg, lambda_bins, color="royalblue",
-             density=True, histtype="stepfilled", label=f"BKG sim\nN={len(lambda_bkg)}")
-    axt.hist(lambda_f_at_ul, lambda_bins_ext, color="r", density=True, histtype="step",
-             label="Sim of final UL")
-    axt.text(0.85, 0.87, f"p-value={p_value:.2f}\nsignificance={significance:.2f} $\\sigma$",
-             ha="center", va="center", transform=axt.transAxes)
-    axt.axvline(lambda_real, color="k", ls="--", label=f"Real data\n$\\Lambda=${lambda_real:.2f}")
-    axt.axvline(lambda_bkg_m, color="darkblue", ls=":", label=f"BKG median\n$\\Lambda=${lambda_bkg_m:.2f}")
-    axt.legend(frameon=False, loc=4)
-    axt.set_xlabel("$\\Lambda$"); axt.set_ylabel("Normalized counts")
-    axt.set_title(f"Sim flux {flux_sim:.2e},   {energy_edges[0]:.2f}-{energy_edges[1]:.2f}")
-    fig.tight_layout()
-    plt.show()
-
-
 def plot_uls_vs_real_distribution(flux_uls, flux_uls_95, flux_real, energy_edges,
-                                  significance=None, flux_bkg=None):
-    """
-    Real per-pixel flux-UL distribution with the quoted UL marked. With
-    `flux_bkg` given (grid-scan mode), both the sensitivity and the data UL
-    are shown, labelled by whether the observation over- or under-fluctuates.
-    """
+                                  significance=None):
+    """Real per-pixel flux-UL distribution with the quoted UL marked."""
     fig, ax = plt.subplots(figsize=(3, 2))
     mask = ~np.isnan(flux_uls_95)
     single_pixel = np.sum(mask) == 1
@@ -1090,19 +869,9 @@ def plot_uls_vs_real_distribution(flux_uls, flux_uls_95, flux_real, energy_edges
 
     ymid = np.diff(ax.get_ylim())[0] / 2
 
-    if flux_bkg is not None:
-        if significance >= 0.0:
-            col_sens, col_ul, lab_sens, lab_ul, ls_sens, ls_ul = "0.5", "green", "Sensitivity", "Data UL", "--", "-"
-        else:
-            col_sens, col_ul, lab_sens, lab_ul, ls_sens, ls_ul = "green", "0.5", "Data UL", "Overestimated UL", "-", "--"
-        for val, ls, col, lab in [(flux_bkg, ls_sens, col_sens, lab_sens),
-                                  (flux_real, ls_ul,  col_ul,  lab_ul)]:
-            ax.axvline(val, ls=ls, color=col)
-            ax.errorbar(val, ymid, yerr=0, xerr=val * 0.2, xuplims=True, ls="", color=col, label=lab)
-    else:
-        ax.axvline(flux_real, ls="-", color="green")
-        ax.errorbar(flux_real, ymid, yerr=0, xerr=flux_real * 0.2, xuplims=True, ls="",
-                    color="green", label="Flux UL")
+    ax.axvline(flux_real, ls="-", color="green")
+    ax.errorbar(flux_real, ymid, yerr=0, xerr=flux_real * 0.2, xuplims=True, ls="",
+                color="green", label="Flux UL")
 
     ax.set_xlabel("Flux UL [1 / (s cm2)]"); ax.set_ylabel("Normalized counts")
     ax.set_title(f"{energy_edges[0]:.2f}-{energy_edges[1]:.2f}")
@@ -1110,45 +879,9 @@ def plot_uls_vs_real_distribution(flux_uls, flux_uls_95, flux_real, energy_edges
     plt.show()
 
 
-def plot_grid_ul_distributions(ulmax_bkg, flux_uls_95, ul_dist, mask_threshold_95,
-                               flux_ul_value, energy_edges):
-    fig, ax = plt.subplots(figsize=(5, 3))
-    ax.hist(ulmax_bkg, 25, density=True, histtype="stepfilled", color="royalblue",
-            label="Maximum UL in 95%", zorder=-5)
-    ax.hist(flux_uls_95, 40, density=True, histtype="step", color="k", label="Real Data 95%", zorder=10)
-    for data in ul_dist:
-        data_95 = np.where(mask_threshold_95, data, np.nan).ravel()
-        ax.hist(data_95, 40, density=True, histtype="step", color="0.5", alpha=0.2, zorder=0)
-    ax.axvline(flux_ul_value, ls="-", color="crimson")
-    ax.errorbar(flux_ul_value, np.diff(ax.get_ylim())[0] / 2, yerr=0,
-                xerr=flux_ul_value * 0.4, xuplims=True, ls="", color="crimson", label="Global UL")
-    ax.plot([], [], color="gray", ls="-", marker="", label="Simulation\ndistributions 95%")
-    ax.set_title(f"{energy_edges[0]:.2f}-{energy_edges[1]:.2f}")
-    ax.legend(loc=(1.03, 0), frameon=False)
-    ax.set_xlabel("Flux UL [1 / (s cm2)]"); ax.set_ylabel("Normalized counts")
-    plt.show()
-
-
-def plot_grid_ts_distributions(lambda_bkg, ts2_masked, ts2_dist, mask_threshold_95, energy_edges):
-    fig, ax = plt.subplots(figsize=(5, 3))
-    ax.hist(lambda_bkg, 30, density=True, histtype="stepfilled", color="r",
-            label="$\\Lambda$ (max TS')", zorder=-5)
-    ax.hist(ts2_masked, 30, density=True, histtype="step", color="k", label="Real Data", zorder=10)
-    for data in ts2_dist:
-        data = np.where(mask_threshold_95, data, np.nan).ravel()
-        ax.hist(data, 30, density=True, histtype="step", color="0.5", alpha=0.2, zorder=0)
-    ax.set_title(f"{energy_edges[0]:.2f}-{energy_edges[1]:.2f}")
-    ax.plot([], [], color="0.8", label="Simulated data")
-    ax.legend(loc=(1.03, 0), frameon=False)
-    ax.set_xlabel("TS'"); ax.set_ylabel("Normalized counts")
-    plt.show()
-
-
-
-
 # ---------------------------------------------------------------------------
 # GW viewing angle: p(d, theta_v) and the Step 4.3 options
-# (setup_angle_distribution.ipynb; gwuls.angle_distribution)
+# (2_gw_viewing_angle.ipynb; gwuls.angle_distribution)
 # ---------------------------------------------------------------------------
 
 # One colour per entity, the same in every angle figure (validated categorical
@@ -1303,7 +1036,7 @@ def plot_conditional_ridge(joint, quantiles=(0.05, 0.5, 0.95), samples=None,
     qs = joint.conditional_theta_quantiles(quantiles, distance_Mpc=dgrid)
     mid = len(quantiles) // 2
     ax.plot(dgrid, qs[:, mid], color=_TEXT, lw=2.0,
-            label=rf"median of $p(\theta_{{\rm v}}\,|\,d_L)$")
+            label=r"median of $p(\theta_{\rm v}\,|\,d_L)$")
     ax.fill_between(dgrid, qs[:, 0], qs[:, -1], color=_TEXT, alpha=0.08, lw=0)
     for k in (0, -1):
         ax.plot(dgrid, qs[:, k], color=_TEXT, lw=1.0)
@@ -1325,13 +1058,7 @@ def plot_conditional_ridge(joint, quantiles=(0.05, 0.5, 0.95), samples=None,
     return _finish(fig, save_path)
 
 
-def _model_angle_lines(ax, model_angles, label=True):
-    for k, a in enumerate([] if model_angles is None else model_angles):
-        ax.axvline(a, color=_GRID, lw=2.5, zorder=0,
-                   label="model file angles" if (label and k == 0) else None)
-
-
-def plot_theta_distribution_comparison(dists, distance_Mpc=None, model_angles=None,
+def plot_theta_distribution_comparison(dists, distance_Mpc=None,
                                        thresholds=(10, 20, 30, 45), title=None, save_path=None):
     """The Step 4.3 options side by side, all normalised per degree so they
     share one axis. dists : dict label -> ThetaDistribution (colour/style by
@@ -1363,8 +1090,6 @@ def plot_theta_distribution_comparison(dists, distance_Mpc=None, model_angles=No
         ax_c.plot(grid, cdf, color=color, ls=ls, lw=2.0)
         handles.append(Line2D([], [], color=color, ls=ls, lw=2.0, label=lab))
 
-    _model_angle_lines(ax_p, model_angles)
-    _model_angle_lines(ax_c, model_angles, label=False)
     ax_p.set_xlim(0, 90); ax_p.set_xticks(np.arange(0, 91, 15)); ax_p.set_ylim(bottom=0)
     ax_p.set_xlabel(r"$\theta_{\rm v}$ [deg]"); ax_p.set_ylabel(r"$p(\theta_{\rm v})$ [deg$^{-1}$]")
     ax_p.set_title("pdf, per degree", fontsize=10)
@@ -1389,8 +1114,6 @@ def plot_theta_distribution_comparison(dists, distance_Mpc=None, model_angles=No
     ax_b.set_xticks(x, [rf"$\theta_{{\rm v}}<{t}^\circ$" for t in thresholds])
     ax_b.set_ylim(0, 1); ax_b.set_ylabel("probability")
     ax_b.set_title("chance of a near-on-axis view", fontsize=10)
-    if model_angles is not None and len(model_angles):
-        handles.append(Line2D([], [], color=_GRID, lw=2.5, label="model file angles"))
     fig.legend(handles=handles, loc="upper center", ncol=min(len(handles), 4), frameon=False,
                bbox_to_anchor=(0.5, 1.0 if not title else 0.97))
     if title:
@@ -1429,63 +1152,6 @@ def plot_theta_sampler_check(dists, n=200_000, distance_Mpc=None, seed=0, save_p
         ax.set_xlabel(r"$\theta_{\rm v}$ [deg]")
     for ax in axs.ravel()[n_panels:]:
         ax.axis("off")
-    return _finish(fig, save_path)
-
-
-def model_angle_weights(dist, model_angles, method="nearest", distance_Mpc=None):
-    """Probability that sim_3d ends up using each model file, for a
-    ThetaDistribution and GRBModelSet.get_model's `method`:
-
-    - "nearest"    (Option A): the mass of p(theta_v) closest to each angle;
-    - "stochastic" (Option B): each theta_v is split between its two
-      bracketing angles linearly, so the weights are p(theta_v) integrated
-      against hat functions. Outside the tabulated range, everything goes to
-      the edge file (as get_model clips).
-    """
-    angles = np.sort(np.asarray(model_angles, dtype=float))
-    dd = distance_Mpc if dist.depends_on_distance else None
-    if dist.kind == "fixed":
-        theta = np.array([dist.theta_fixed_deg]); w = np.array([1.0])
-    else:
-        theta = np.linspace(0, 90, 3601)
-        _, p = dist.pdf_grid(distance_Mpc=dd, theta_grid_deg=theta)
-        w = p * np.gradient(theta)
-        w = w / w.sum()
-    if method == "nearest":
-        k = np.argmin(np.abs(theta[:, None] - angles[None, :]), axis=1)
-        return np.bincount(k, weights=w, minlength=angles.size)
-    if method == "stochastic":
-        out = np.zeros(angles.size)
-        for k in range(angles.size):
-            e = np.zeros(angles.size); e[k] = 1.0
-            out[k] = np.sum(w * np.interp(theta, angles, e))  # np.interp clamps at the edges
-        return out
-    raise ValueError("method must be 'nearest' or 'stochastic'")
-
-
-def plot_model_angle_assignment(dists, model_angles, method="nearest", distance_Mpc=None,
-                                save_path=None):
-    """Grouped bars: for each model file (angle), the fraction of iterations
-    that would use it under each Step 4.3 option. This is where the choice of
-    angle distribution actually reaches the upper limit."""
-    angles = np.sort(np.asarray(model_angles, dtype=float))
-    labs = list(dists)
-    width = 0.8 / len(labs)
-    x = np.arange(angles.size)
-    fig, ax = plt.subplots(figsize=(9, 3.8))
-    for k, lab in enumerate(labs):
-        D = dists[lab]
-        w = model_angle_weights(D, angles, method=method, distance_Mpc=distance_Mpc)
-        ax.bar(x + (k - (len(labs) - 1) / 2) * width, w, width * 0.9,
-               color=ANGLE_KIND_COLORS.get(D.kind, _TEXT_2),
-               hatch="//" if D.kind in ANGLE_KIND_STYLES else None, edgecolor="white", lw=0,
-               label=lab)
-    ax.set_xticks(x, [rf"{a:.1f}$^\circ$" for a in angles])
-    ax.set_xlabel("model file used (its viewing angle)")
-    ax.set_ylabel("fraction of iterations")
-    ax.set_ylim(0, 1)
-    ax.set_title(f"Which model file each option sends the draws to ({method})", fontsize=10)
-    ax.legend(frameon=False, fontsize=8, loc="upper left", bbox_to_anchor=(1.01, 1.0))
     return _finish(fig, save_path)
 
 
