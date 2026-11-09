@@ -129,111 +129,90 @@ generated at; a subscript $i$ marks values drawn in iteration $i$.
 
 ## 3. A: The GW localisation on the analysis grid
 
-*Code: `utils.py`; notebook Part 1, "Reading GW data" through "3D GW: distance CDF per WCS bin".*
+*Code: `utils.py`; notebook Part 1, "Reading GW data" to "3D GW: distance CDF per WCS bin".*
 
 ### 3.1 What the skymap contains
 
-The LVK skymap is a HEALPix map. Each pixel $j$ holds the probability $P_j$ that the source lies in
-that pixel. It also holds three numbers describing the distance along that line of sight, using
-the ansatz of Singer et al. (2016):
+A HEALPix map: each pixel $j$ holds the probability $P_j$ that the source is there, and three
+numbers for the distance along that line of sight (Singer et al. 2016):
 
 $$
 p(d \mid j) = N_j\, d^2\, \frac{1}{\sqrt{2\pi}\,\sigma_j}\exp\!\left[-\frac{(d-\mu_j)^2}{2\sigma_j^2}\right],
 \qquad (\mu_j,\sigma_j,N_j) = (\texttt{DISTMU},\texttt{DISTSIGMA},\texttt{DISTNORM}).
 $$
 
-The $d^2$ is the volume element. $\mu_j$ and $\sigma_j$ are ansatz parameters, not the mean and
-standard deviation.
+$d^2$ is the volume element; $\mu_j$ and $\sigma_j$ are ansatz parameters, not the mean and width.
 
 ### 3.2 From HEALPix to the WCS analysis grid
 
-The gammapy analysis uses a WCS map: an AIR projection centred on `source_coord`, 3.575° wide,
-with 0.08° bins. Each HEALPix pixel is assigned to the bin that contains it, and the bin probability is
-the mean pixel probability scaled to the bin's solid angle:
+The analysis map is WCS (AIR projection around `source_coord`, 3.575° wide, 0.08° bins). Each
+HEALPix pixel goes to the bin containing it, and the bin probability is the mean pixel probability
+scaled to the bin's solid angle,
 
 $$
-p_b = \Big(\tfrac{1}{n_b}\sum_{j\in b} P_j\Big)\,\frac{\Omega_b}{\Omega_{\rm pix}}.
+p_b = \Big(\tfrac{1}{n_b}\sum_{j\in b} P_j\Big)\,\frac{\Omega_b}{\Omega_{\rm pix}},
 $$
 
-This corrects for the whole number of HEALPix pixels that happen to fall in each bin.
-$\sum_b p_b$ is the fraction of the GW probability inside the analysis field, printed as
-"Geometry covers X% of the GW". Before taking logarithms, $p_b$ is floored at $10^{-20}$.
+which corrects for the whole number of pixels per bin. $\sum_b p_b$ is printed as "Geometry covers
+X% of the GW"; $p_b$ is floored at $10^{-20}$ before taking logarithms.
 
 ### 3.3 The 95% credible region
 
-HEALPix pixels are sorted by probability and accumulated until 95% is reached. The probability of
-the last pixel added is the contour level. The map is resampled onto a plate-carrée grid and
-contoured at that level. A WCS bin belongs to $\mathcal{M}_{95}$ if its centre falls inside the
-contour. $\Lambda$ is only searched inside $\mathcal{M}_{95}$.
+Pixels sorted by probability are accumulated to 95%; the last one sets the contour level. A bin is
+in $\mathcal{M}_{95}$ if its centre lies inside that contour. $\Lambda$ is searched only there.
 
 ### 3.4 Distance along each WCS bin
 
-A WCS bin contains many HEALPix pixels, each with its own distance ansatz. The distance
-distribution of the bin is their probability-weighted mixture:
+A bin's distance distribution is the probability-weighted mixture of its pixels',
 
 $$
 F_b(r) = \sum_{j\in b} w_j\, F_j(r), \qquad w_j = \frac{P_j}{\sum_{k\in b}P_k},
 $$
 
-where $F_j$ is the CDF of $p(d\mid j)$ (`ligo.skymap.distance.marginal_cdf`). This gives
-`cdf_table[b, :]` on `r_grid`: 1000 linear points from 1 to 10 000 Mpc. Pixels with no distance
-information ($\mu_j=\infty$) are skipped. `cdf_valid[b]` records whether a bin has a usable CDF.
-The table is cached under `data/gw_input/` with a hash of its inputs.
+with $F_j$ the CDF of $p(d\mid j)$ (`ligo.skymap.distance.marginal_cdf`), tabulated as
+`cdf_table[b, :]` on `r_grid` (1000 points, 1–10 000 Mpc) and cached under `data/gw_input/`.
+Pixels without distance information are skipped; `cdf_valid[b]` marks usable bins. The grid starts
+at **1 Mpc, not 0**: the injector converts luminosity to flux through $1/d^2$, and one draw at $d=0$
+would dominate every $\Lambda$ distribution.
 
-The grid starts at **1 Mpc, not 0**. The 3D injector converts luminosity to flux through
-$1/d^2$, so a single draw at $d=0$ would inject infinite flux and dominate every $\Lambda$
-distribution.
-
-The sky-marginal distance prior over the field of view is
-
-$$
-F(r) = \sum_b \tilde p_b\,F_b(r), \qquad \tilde p_b = \frac{p_b\,\mathbf{1}[\text{valid}_b]}{\sum_{b'} p_{b'}\,\mathbf{1}[\text{valid}_{b'}]}
-$$
-
-(`simulate.marginal_distance_pdf`). It is computed once and reused for every flux ↔ luminosity
-translation in the report ([§8](#8-f-reporting-both-limits-both-ways)).
+The sky-marginal distance distribution over the field,
+$F(r) = \sum_b \tilde p_b\,F_b(r)$ with $\tilde p_b \propto p_b\,\mathbf{1}[\text{valid}_b]$
+(`simulate.marginal_distance_pdf`), is used for every flux ↔ luminosity translation in the report
+(§8).
 
 ### 3.5 Dirac-delta mode
 
-With `USE_DIRAC_DELTA = True`, all the probability is put in the hottest pixel. $\Lambda$ then
-reduces to the TS at a single known position, with no trials factor, so the Monte-Carlo limit
-should reproduce gammapy's ordinary per-pixel UL (checked in early versions, in git history).
+`USE_DIRAC_DELTA = True` puts all the probability in the hottest pixel. $\Lambda$ then reduces to the
+TS at one known position with no trials factor, so the Monte-Carlo limit should reproduce gammapy's
+per-pixel UL (checked in early versions, in git history).
 
 ---
 
 ## 4. B: IACT data, background and the test statistic Λ
 
-*Code: notebook Part 1, "Reading the DL3 data" through "Computing Λ for the real data";
+*Code: notebook Part 1, "Reading the DL3 data" to "Computing Λ for the real data";
 `simulate._TSEngine`.*
 
 ### 4.1 Dataset and background
 
-- **Data.** DL3 runs of S240615dg (LST-1 + MAGIC "stereo" production, `obs_ids` 17821–17825).
-  Each run carries its IRFs (effective area, energy dispersion, PSF) and a 3D background model
-  from `pybkgmodel` or `baccmod`.
-- **Geometry.** Reco energy 0.6–20 TeV at 4.5 bins per decade; true energy 0.05–100 TeV; safe mask
-  offset < 2.5°.
-- **Software.** Datasets, IRF folding and estimators are from Gammapy (Donath et al. 2023).
-- **Background.** Ring method (Berge, Funk & Hinton 2007; `RingBackgroundMaker`): for each position, OFF counts are taken from
-  a ring with inner radius 0.3° and width 0.2°. The expected background is
-  $\mu_{\rm bkg} = \alpha\,n_{\rm off}$, where $\alpha$ is the ratio of ON to OFF acceptance,
-  whose spatial shape comes from the 3D background model.
+- **Data:** DL3 runs of S240615dg (LST-1 + MAGIC stereo, `obs_ids` 17821–17825), each with its IRFs
+  and a 3D background model from `pybkgmodel` or `baccmod`.
+- **Geometry:** reco energy 0.6–20 TeV, 4.5 bins per decade; true energy 0.05–100 TeV; offset < 2.5°.
+- **Background:** ring method (Berge, Funk & Hinton 2007), inner radius 0.3°, width 0.2°;
+  $\mu_{\rm bkg} = \alpha\,n_{\rm off}$ with the acceptance ratio $\alpha$ shaped by the 3D model.
+- **Software:** Gammapy (Donath et al. 2023).
 
 ### 4.2 Per-bin test statistic
 
-Counts are summed over energy and correlated with a top-hat of radius $r_c = 0.1°$. This gives,
-for each bin, an "ON region" with $n_b$ counts and a background expectation $\mu_b$. With the
-Cash (1979) Poisson statistic $C(n,\mu) = 2(\mu - n\ln\mu)$, the likelihood ratio between
-"background plus the best-fit excess" (saturated, $\mu=n$) and "background only" ($\mu=\mu_b$) is
+Counts summed over energy and correlated with a top-hat of $r_c = 0.1°$ give, per bin, $n_b$ ON
+counts and a background expectation $\mu_b$. With the Cash (1979) statistic,
 
 $$
-\mathrm{TS}_b = \operatorname{sign}(n_b-\mu_b)\cdot\max\!\Big[0,\;C(n_b,\mu_b)-C(n_b,n_b)\Big]
-= \operatorname{sign}(n_b-\mu_b)\cdot 2\Big[n_b\ln\frac{n_b}{\mu_b}-(n_b-\mu_b)\Big].
+\mathrm{TS}_b = \operatorname{sign}(n_b-\mu_b)\cdot 2\Big[n_b\ln\frac{n_b}{\mu_b}-(n_b-\mu_b)\Big],
 $$
 
-By Wilks' theorem (Wilks 1938), $\sqrt{|\mathrm{TS}_b|}$ is approximately the local significance of an excess
-($+$) or deficit ($-$). The background is treated as known ($\mu_b$ fixed), both in the real data
-and in the simulations, so the two are computed identically.
+and $\sqrt{|\mathrm{TS}_b|}$ is approximately the local significance (Wilks 1938) of an excess ($+$) or
+deficit ($-$). The background is treated as known, in the data and the simulations alike.
 
 ### 4.3 GW weighting and the global statistic Λ
 
@@ -242,66 +221,46 @@ $$
 \Lambda = \max_{b\in\mathcal{M}_{95}} \mathrm{TS}'_b .
 $$
 
-**Physical reading.** $\mathrm{TS}_b = 2\ln(\mathcal{L}_1/\mathcal{L}_0)$, so
-$\mathrm{TS}'_b = 2\ln\!\big[(\mathcal{L}_1/\mathcal{L}_0)\cdot p_b\big]$. $\Lambda$ picks the
-position where "the gamma-ray data prefer a source" times "the GW data say the source is here"
-is largest. A modest excess where the GW probability is high can beat a stronger excess where it
-is low. Weighting by the prior tempers the look-elsewhere effect of scanning the whole region.
-The price is that an excess in a low-probability bin must overcome a penalty: it wins only if
+Since $\mathrm{TS}_b = 2\ln(\mathcal{L}_1/\mathcal{L}_0)$, $\Lambda$ picks the position where "the
+gamma-ray data prefer a source" times "the GW data say the source is here" is largest. A modest
+excess where the GW probability is high can beat a stronger one where it is low, which tempers the
+look-elsewhere effect; an excess in bin $b$ wins only if $\mathrm{TS}_b > \Lambda^\star - 2\ln p_b$.
 
-$$
-\mathrm{TS}_b > \Lambda^\star - 2\ln p_b .
-$$
-
-Details that matter:
-
-- $\Lambda$ is usually **negative**: $p_b\ll1$, so $2\ln p_b$ is a large negative number.
-- $p_b$ depends on the bin size, but that shifts every $\mathrm{TS}'_b$ by the same constant.
-  Observed and simulated $\Lambda$ share the grid, so the constant cancels in every comparison.
-- Taking a maximum is a *profile* over position. Summing $e^{\mathrm{TS}'_b/2}$ over bins would
-  instead be a position-marginalised likelihood ratio (a Bayes factor). The pipeline uses the
-  maximum.
+- $\Lambda$ is usually **negative**, since $p_b\ll1$.
+- $p_b$ depends on the bin size, but that shifts every $\mathrm{TS}'_b$ by one constant, which
+  cancels between observed and simulated $\Lambda$.
+- The maximum is a *profile* over position (a sum of $e^{\mathrm{TS}'_b/2}$ would be a Bayes factor).
 
 ### 4.4 Observed significance
 
-$N_{\rm bkg}=5000$ realisations with no injected source ([§6.2](#62-background-only-realisations))
-give the null distribution of $\Lambda$:
+$N_{\rm bkg}=5000$ background-only realisations (§6.2) give the null distribution:
 
 $$
 p = P(\Lambda_{\rm bkg} > \Lambda_{\rm obs}), \qquad S = \Phi^{-1}(1-p), \qquad
 \sigma_p = \sqrt{p(1-p)/N_{\rm bkg}} .
 $$
 
-Each background realisation takes the same maximum over the same region, so $p$ is already
-**post-trials**. If $p$ saturates at 0 or 1, the significance is only bounded, at
-$|S| > \Phi^{-1}(1-1/N_{\rm bkg})$.
+Every realisation takes the same maximum over the same region, so $p$ is already **post-trials**.
+If $p$ saturates, $|S|$ is only bounded at $\Phi^{-1}(1-1/N_{\rm bkg})$.
 
 ### 4.5 The simulation dataset
 
-The dataset written to the `.pkl` (`dataset_stacked_simulated`) is built from the **real** runs:
-same IRFs, livetimes, pointings and reference times, with its background map set to the **real
-ring background** of each run. A simulated observation is therefore
+The simulation dataset in the `.pkl` is built from the **real** runs (IRFs, livetimes, pointings,
+reference times) with the **real ring background** of each run, so a simulated observation is
 
 $$
-n^{\rm sim}_{\rm pix,E} \sim \operatorname{Poisson}\!\big(\mu^{\rm bkg}_{\rm pix,E} + \mu^{\rm sig}_{\rm pix,E}(\phi_0, \text{position})\big),
+n^{\rm sim}_{\rm pix,E} \sim \operatorname{Poisson}\!\big(\mu^{\rm bkg}_{\rm pix,E} + \mu^{\rm sig}_{\rm pix,E}\big),
 $$
 
-with $\mu^{\rm sig}$ the source model folded through exposure, PSF and energy dispersion
-(`dataset.fake`). After faking, the model is removed, so the injected source is not treated as
-known background, and $\Lambda$ is computed exactly as for the real data.
+with $\mu^{\rm sig}$ the source folded through exposure, PSF and energy dispersion (`dataset.fake`).
+The model is then removed and $\Lambda$ computed exactly as for the data.
 
 ### 4.6 Containment factor and sky-map ULs
 
-`ExcessMapEstimator` measures flux inside the top-hat of radius $r_c$, which misses part of a
-PSF-spread point source. The notebook injects a bright source ($\phi_0=10^{-8}$) at the field
-centre 100 times and measures the flux-recovery ratio
-
-$$
-\kappa = \operatorname{median}\!\left[F_{\rm est}/F_{\rm true}\right].
-$$
-
-Per-pixel sky-map ULs are divided by $\kappa$. These per-pixel ULs (95% CL, `n_sigma_ul = Φ⁻¹(0.95)`)
-carry **no trials factor**. They are used as a sanity reference in [§7.6](#76-trials-factor-sanity-check).
+`ExcessMapEstimator` measures flux inside the top-hat, which misses part of a PSF-spread source. A
+bright source injected 100 times at the field centre gives
+$\kappa = \operatorname{median}[F_{\rm est}/F_{\rm true}]$, and per-pixel sky-map ULs (95% CL) are
+divided by $\kappa$. They carry **no trials factor** and serve as a reference in §7.6.
 
 ---
 
@@ -314,71 +273,50 @@ carry **no trials factor**. They are used as a sanity reference in [§7.6](#76-t
 For $dN/dE = \phi_0 (E/E_0)^{-\Gamma}$ and $x = E/E_0$:
 
 $$
-F_{\rm ph} = \int_{E_{\min}}^{E_{\max}}\frac{dN}{dE}dE = \phi_0E_0\,I_1,\quad I_1=\int_{x_1}^{x_2}x^{-\Gamma}dx;
+F_{\rm ph} = \phi_0E_0\int_{x_1}^{x_2}x^{-\Gamma}dx,
 \qquad
-F_E = \int_{E_{\min}}^{E_{\max}}E\frac{dN}{dE}dE = \phi_0E_0^2\,I_2,\quad I_2=\int_{x_1}^{x_2}x^{1-\Gamma}dx.
+F_E = \phi_0E_0^2\int_{x_1}^{x_2}x^{1-\Gamma}dx .
 $$
 
-**Γ = 2 is the singular case of $I_2$.** The generic form $[x^{2-\Gamma}]/(2-\Gamma)$ gives 0/0
-there. The limit is a logarithm, and the code uses it explicitly:
+**Γ = 2 is the singular case** of $F_E$: the generic $[x^{2-\Gamma}]/(2-\Gamma)$ is 0/0 there, and
+the code uses the limit explicitly,
 
 $$
 F_E\big|_{\Gamma=2} = \phi_0 E_0^2 \ln\frac{E_{\max}}{E_{\min}}, \qquad
 F_{\rm ph}\big|_{\Gamma=2} = \phi_0E_0^2\left(\frac1{E_{\min}}-\frac1{E_{\max}}\right).
 $$
 
-A Γ = 2 spectrum carries equal energy per decade, which is why $F_E$ grows only logarithmically
-with the band width. The reported SED point is $E^2\,dN/dE$ at the logarithmic band centre
-$E_{\rm dec}=\sqrt{E_{\min}E_{\max}}$.
+The reported SED point is $E^2\,dN/dE$ at $E_{\rm dec}=\sqrt{E_{\min}E_{\max}}$.
 
 ### 5.2 Luminosity
 
 $$
-L_{[E_{\min},E_{\max}]} = 4\pi d^2\,F_E\,(1+z)^{\Gamma-2}.
+L_{[E_{\min},E_{\max}]} = 4\pi d^2\,F_E\,(1+z)^{\Gamma-2},
+\qquad
+\phi_0(L_0,d) = \frac{L_0}{4\pi d^2\,(1+z)^{\Gamma-2}\;E_0^2\,I_2},
 $$
 
-- $L$ is the **isotropic-equivalent luminosity in the analysis band**. It is not bolometric: no
-  emission is extrapolated outside the band the data constrain.
-- $(1+z)^{\Gamma-2}$ is the power-law **K-correction**. The observed band $[E_{\min},E_{\max}]$
-  was emitted in $(1+z)[E_{\min},E_{\max}]$, and for a power law
-  $\int E\,dN/dE\,dE$ over a band scaled by $a$ changes by $a^{2-\Gamma}$. At Γ = 2 it is exactly
-  1, so band luminosities do not depend on $z$ at this index. It is off by default and only
-  matters if the index changes.
-- $z(d)$ uses Planck18 through a cached interpolation table.
+with $I_2 = \int_{x_1}^{x_2} x^{1-\Gamma}dx$; the inverse is what the 3D injector uses.
 
-The inverse, used by the 3D injector, is
-
-$$
-\phi_0(L_0,d) = \frac{L_0}{4\pi d^2\,(1+z)^{\Gamma-2}\;E_0^2\,I_2}.
-$$
+- $L$ is the **isotropic-equivalent luminosity in the analysis band**, not bolometric.
+- $(1+z)^{\Gamma-2}$ is the power-law K-correction, exactly 1 at Γ = 2 (off by default).
+- $z(d)$ is Planck18, through a cached table.
 
 ### 5.3 Worked example: 0.6–20 TeV, Γ = 2, $\phi_0 = 10^{-12}$ cm⁻² s⁻¹ TeV⁻¹
-
-Computed with the repository code:
 
 | Quantity | Value |
 | --- | --- |
 | photon flux $F_{\rm ph}$ | 1.617 × 10⁻¹² cm⁻² s⁻¹ |
-| energy flux $F_E$ | 5.618 × 10⁻¹² erg cm⁻² s⁻¹ ($=\phi_0E_0^2\ln 33.3$) |
+| energy flux $F_E$ | 5.618 × 10⁻¹² erg cm⁻² s⁻¹ |
 | $E^2dN/dE$ at $E_{\rm dec}$ = 3.46 TeV | 1.602 × 10⁻¹² erg cm⁻² s⁻¹ |
-| $L$ at $d$ = 1123 / 1566 / 1849 Mpc ($z$ = 0.22 / 0.29 / 0.34) | 0.85 / 1.65 / 2.30 × 10⁴⁵ erg s⁻¹ |
-
-The three distances are the 5/50/95% points of the S240615dg PE posterior.
+| $L$ at $d$ = 1123 / 1566 / 1849 Mpc (S240615dg PE 5/50/95%) | 0.85 / 1.65 / 2.30 × 10⁴⁵ erg s⁻¹ |
 
 ### 5.4 What the luminosity does *not* include: EBL
 
-The injected power law is the spectrum **arriving at Earth**. No extragalactic-background-light
-absorption is applied, so $L_0$ is the luminosity of the *observed* (absorbed) spectrum
-projected back with $4\pi d^2$, not the intrinsic luminosity. For S240615dg this is a large
-effect. At $z\approx0.29$, with the EBL model of Domínguez et al. (2011):
-
-| Energy | 0.3 TeV | 0.6 TeV | 1 TeV | 2 TeV | 5 TeV | 10 TeV |
-| --- | --- | --- | --- | --- | --- | --- |
-| optical depth $\tau$ | 0.9 | 2.3 | 3.6 | 4.8 | 7.5 | 15.5 |
-
-Only $e^{-2.3}\approx10\%$ of the intrinsic flux survives at the bottom of the band. An intrinsic
-luminosity limit needs EBL absorption at the drawn $z_i$ (guidelines Step 7). The emission-model
-limit applies it ([§11](#11-the-3d-limit-with-the-emission-model)).
+The power law is the spectrum **arriving at Earth**, so $L_0$ is the observed (absorbed) luminosity,
+not the intrinsic one. For S240615dg ($z\approx0.29$, Domínguez et al. 2011) the optical depth is
+2.3 at 0.6 TeV, 3.6 at 1 TeV and 7.5 at 5 TeV: only ~10% of the flux survives at the bottom of the
+band. The emission-model limit applies EBL at each drawn $z_i$ (§11).
 
 ---
 
@@ -388,224 +326,149 @@ limit applies it ([§11](#11-the-3d-limit-with-the-emission-model)).
 
 ### 6.1 One realisation
 
-Common to every mode:
-
-1. Place a point source with spectrum $\phi_0(E/E_0)^{-2}$ at a position (§6.3 or §6.4).
-2. Poisson-sample the counts: `dataset.fake(seed)`.
-3. Remove the model, compute the $\mathrm{TS}$ map and $\mathrm{TS}'$ map, and record $\Lambda$
-   and its position.
+Place a point source with spectrum $\phi_0(E/E_0)^{-2}$ at a position (§6.3, §6.4), Poisson-sample
+the counts (`dataset.fake(seed)`), remove the model, and record $\Lambda$ and its position.
 
 ### 6.2 Background-only realisations
 
-$\phi_0 = 0$ and $N = 5000$. This gives the null distribution of $\Lambda$, the p-value and
-significance ([§4.4](#44-observed-significance)), and the median $\Lambda_{\rm bkg}$ used as the
-reference when the data under-fluctuate. A split-half comparison of medians checks that the
-distribution is stable.
+$\phi_0 = 0$, $N = 5000$: the null distribution, the p-value (§4.4), and the median
+$\Lambda_{\rm bkg}$ used as reference when the data under-fluctuate. A split-half comparison of
+medians checks its stability.
 
 ### 6.3 2D sampler (fixed flux)
 
-- $\phi_0$ is fixed.
-- The **position** is a HEALPix pixel $j$ drawn with probability $\propto P_j$, restricted to
-  pixels whose nearest WCS bin is in $\mathcal{M}_{95}$ and renormalised. The source is injected
-  at the HEALPix pixel centre.
-
-The 2D limit is therefore **conditional on the source lying in the observed part of the 95%
-region**. The coverage (`frac_gw_in_mask`, "Mask covers X% of the all-sky GW probability") should
-be quoted with it.
+$\phi_0$ is fixed; the position is a HEALPix pixel drawn $\propto P_j$ among pixels whose nearest bin
+is in $\mathcal{M}_{95}$, injected at the pixel centre. The 2D limit is therefore **conditional on
+the source lying in the observed part of the 95% region**, whose coverage (`frac_gw_in_mask`)
+should be quoted with it.
 
 ### 6.4 3D sampler (fixed luminosity)
 
-- $L_0$ is fixed.
-- **Bin:** $b \sim \tilde p_b$ over bins with a valid distance CDF, over the **full** map by
-  default. With `restrict_to_mask_3d = True` it is limited to $\mathcal{M}_{95}$.
-- **Distance:** $d = F_b^{-1}(u)$ with $u\sim U(0,1)$, by inverse CDF with linear interpolation
-  on `r_grid`.
-- **Amplitude:** $\phi_0 = \phi_0(L_0, d)$ from §5.2. A round-trip $L\to\phi_0\to L$ on 64 draws is
-  checked to machine precision.
-- The source is injected at the **bin centre**.
-
-Each realisation is one hypothetical universe: the counterpart is at a GW-allowed place and
-distance, has luminosity $L_0$, and shows the flux that implies. The 3D limit is conditional on
-the source lying inside the analysis field, since the sampler renormalises over it.
+$L_0$ is fixed. A bin $b \sim \tilde p_b$ over the **full** map (or $\mathcal{M}_{95}$ with
+`restrict_to_mask_3d = True`), a distance $d = F_b^{-1}(u)$ by inverse CDF, the amplitude
+$\phi_0(L_0, d)$ of §5.2 (round trip checked to machine precision), injected at the bin centre.
+Each realisation is one hypothetical universe: the counterpart at a GW-allowed place and distance,
+with luminosity $L_0$. The limit is conditional on the source lying inside the analysis field.
 
 ### 6.5 Common random numbers and seeding
 
-Realisation $i$ always uses fake seed `base_seed + i`. Because seeds follow the global realisation index, parallel runs (`N_JOBS`) produce exactly the
-same $\Lambda$ sample as sequential ones. The closure tests (§7.5) use their own seeds
-(900 000 for the background, 987 654 for sky, distance and angle), so they are independent of
-the realisations that set the limit.
-
-The upper-limit fit of §7.3 needs the opposite: its likelihood treats every realisation as an
-independent draw, so no two may share a background seed or a position. Realisation $i$ of a
-limit uses seed `seed_fit + i` (`seed_fit` = 1 000 000, clear of the background-only block
-`0 … n_sim_bkg - 1`, which enters the same fit), and round $r$ draws its positions or
-distances with the seed `[12345, r]`.
+Realisation $i$ uses fake seed `base_seed + i`, so parallel runs (`N_JOBS`) give the same $\Lambda$
+sample as sequential ones. The upper-limit fit (§7.3) needs every realisation independent: a limit's
+realisation $i$ uses `seed_fit + i` (`seed_fit` = 1 000 000, clear of the background block
+`0 … n_sim_bkg - 1`, which enters the same fit), and round $r$ draws positions with `[12345, r]`.
+Closure tests use their own seeds (900 000 for the background, 987 654 for sky, distance and angle).
 
 ---
 
 ## 7. E: From Λ distributions to an upper limit
 
-*Code: `simulate._fit_ul`, `run_fit_ul`, `run_fit_ul_3d` (§7.3).*
+*Code: `simulate._fit_ul`, `run_fit_ul`, `run_fit_ul_3d`.*
 
 ### 7.1 Definition
 
-Let $x$ be the injected strength ($\phi_0$ in 2D, $L_0$ in 3D). Define
+With $x$ the injected strength ($\phi_0$ in 2D, $L_0$ in 3D),
 
 $$
 f(x) = P\big(\Lambda_x > \Lambda^\star\big), \qquad
 x_{\rm UL}: \quad f(x_{\rm UL}) = \mathrm{CL} = 0.95,
 $$
 
-where the reference is $\Lambda^\star = \Lambda_{\rm obs}$ if $S\ge0$, and
-$\Lambda^\star = \operatorname{median}(\Lambda_{\rm bkg})$ if $S<0$.
-
-**Meaning.** A counterpart at $x_{\rm UL}$ would have produced a larger $\Lambda$ than the one
-observed in 95% of GW-consistent realisations, so brighter counterparts are excluded at 95% CL.
-This is a Neyman-type construction on the global statistic, and it includes the trials factor
-of the region automatically.
-
-When the data under-fluctuate ($S<0$), $\Lambda^\star$ is raised to the background median.
-The limit then cannot be tighter than the median sensitivity, the same idea as a
-power-constrained limit (Cowan et al. 2011). A downward fluctuation of the background cannot produce an
-artificially strong constraint.
+with $\Lambda^\star = \Lambda_{\rm obs}$ if $S\ge0$ and $\operatorname{median}(\Lambda_{\rm bkg})$ if
+$S<0$. A counterpart at $x_{\rm UL}$ would have given a larger $\Lambda$ than observed in 95% of
+GW-consistent realisations: a Neyman-type construction on the global statistic, trials factor
+included. Raising $\Lambda^\star$ to the background median on an under-fluctuation stops the limit
+from beating the median sensitivity, as in power-constrained limits (Cowan et al. 2011).
 
 ### 7.2 What sets the value of the limit
 
-**2D.** $f(\phi_0)$ is a probability-weighted average over positions. Positions differ in
-exposure (offset from the pointings), background level, and GW penalty $-2\ln p_b$ ([§4.3](#43-gw-weighting-and-the-global-statistic-λ)).
-Reaching $f=0.95$ requires detecting the source at almost all GW-probable positions, so the 2D
-limit is driven by the least favourable ~5% of the probability: lowest exposure, or highest
-penalty.
+**2D.** $f(\phi_0)$ averages over positions with different exposure, background and GW penalty
+$-2\ln p_b$. Reaching 0.95 needs detection almost everywhere, so the limit is set by the least
+favourable ~5% of the probability.
 
-**3D.** $f_{\rm 3D}(L_0) = \mathbb{E}_{b,d}\big[f_{\rm pos}(\phi_0(L_0,d))\big]$. Suppose the
-single-position detection probability were a step at flux $F^\star$. Then
-$f_{\rm 3D}(L_0) = P\big(d < \sqrt{L_0/4\pi F^\star}\big)$, and the 95% point is
+**3D.** If the single-position detection probability were a step at flux $F^\star$, then
+$f_{\rm 3D}(L_0) = P(d < \sqrt{L_0/4\pi F^\star})$ and
 
 $$
-L_0^{\rm UL}\approx 4\pi\,d_{95}^2\,F^\star .
+L_0^{\rm UL}\approx 4\pi\,d_{95}^2\,F^\star :
 $$
 
-The 3D limit is governed by the **far tail** of the distance posterior, not its median: the
-counterpart must be detectable even when it is at the far end of the allowed distances. A smooth
-detection curve pushes the limit up further. The report compares against $L$ at the 5/50/95%
-distances, and the 95% one is the natural comparison point.
+the 3D limit is set by the **far tail** of the distance posterior, not its median. (The notebook's
+$\langle 1/d^2\rangle$ printout describes the mean injected flux, which near draws dominate; the
+exclusion fraction is limited by the far ones.)
 
-The notebook printout frames the 2D/3D gap through $\langle 1/d^2\rangle$ and says the nearest
-realisations dominate. That is true for the *mean injected flux*, but a 95% exclusion fraction is
-limited by the farthest draws.
-
-**Coverage cap (3D, full-map sampling).** A source drawn outside $\mathcal{M}_{95}$ essentially
-cannot raise $\Lambda$, which is only searched inside the mask. So
-
-$$
-f_{\rm 3D}(L_0)\lesssim P(\mathcal{M}_{95}\mid\text{field}) .
-$$
-
-If that probability is below 0.95, $f$ never reaches CL at any $L_0$ and no 95% limit exists.
-The bracket check then reports "still below CL at the upper bracket". The notebook prints both
-support fractions next to each other for this reason. If it is above 0.95 but below 1, $f$
-flattens out below 1 and the limit sits where it is still climbing towards that ceiling. The
-fit of §7.3 measures the ceiling as its parameter $c$.
+**Coverage cap.** A source drawn outside $\mathcal{M}_{95}$ hardly raises $\Lambda$, so with full-map
+sampling $f_{\rm 3D}\lesssim P(\mathcal{M}_{95}\mid\text{field})$. Below 0.95 no limit exists (the
+bracket check reports it); between 0.95 and 1, $f$ flattens below 1 and the fit of §7.3 measures the
+ceiling as $c$.
 
 ### 7.3 Fit of the detection probability
 
-*Code: `simulate._fit_ul`, `run_fit_ul`, `run_fit_ul_3d`. Figure: `plotting.plot_ul_fit`.*
+*Figure: `plotting.plot_ul_fit`.*
 
-Every realisation $i$ gets its **own** injected strength $x_i$, together with its own position (and distance, and viewing
-angle), and records $y_i = \mathbf 1[\Lambda_i > \Lambda^\star]$. The $y_i$ are independent Bernoulli
-draws with probability $f(x_i)$, modelled as
+Every realisation $i$ gets its **own** strength $x_i$ (and position, distance, angle) and records
+$y_i = \mathbf 1[\Lambda_i > \Lambda^\star]$, a Bernoulli draw with probability
 
 $$
 f(x) = f_0 + (c - f_0)\,\Phi\!\left(z_0 + \frac{\log_{10} x - \log_{10} x_{\rm UL}}{s}\right),
-\qquad z_0 = \Phi^{-1}\!\left(\frac{\mathrm{CL} - f_0}{c - f_0}\right).
+\qquad z_0 = \Phi^{-1}\!\left(\frac{\mathrm{CL} - f_0}{c - f_0}\right),
 $$
 
-$f(x_{\rm UL}) = \mathrm{CL}$ holds by construction, so the limit is itself a fit parameter. The other
-three are nuisance parameters:
-
-| parameter | meaning | constrained by |
-| --- | --- | --- |
-| $f_0$ | $f$ with no signal | the background-only sample ($k$ of $N_{\rm bkg}$ above $\Lambda^\star$), in the same likelihood |
-| $c$ | $f$ for an arbitrarily bright source: 1, or less under the coverage cap of §7.2 | realisations above the transition |
-| $s$ | width of the transition, in dex | realisations across it |
+so $f(x_{\rm UL}) = \mathrm{CL}$ by construction and the limit is a fit parameter. Nuisances: $f_0$
+(no signal, pinned by the background sample in the same likelihood), $c$ (ceiling, 1 unless capped),
+$s$ (transition width in dex):
 
 $$
 \ln L = \sum_i \Big[y_i \ln f(x_i) + (1-y_i)\ln\big(1-f(x_i)\big)\Big] + k\ln f_0 + (N_{\rm bkg}-k)\ln(1-f_0) .
 $$
 
-**Uncertainty.** The profile likelihood of $\log_{10}x_{\rm UL}$, with $s$, $f_0$ and $c$ re-fitted at
-every point, gives the 1σ interval where $-2\Delta\ln L = 1$ and the 2σ interval where it is 4.
-This is the Monte-Carlo uncertainty of the limit, from the finite number of realisations. It is
-not a systematic uncertainty. Every flux quantity scales with $\phi_0$ and every 3D quantity with
-$L_0$, so each shares the relative interval of its limit. The intervals go into the summary table,
-the figures, and the JSON export (`*_1sigma`, `*_2sigma`).
+**Uncertainty.** The profile likelihood of $\log_{10}x_{\rm UL}$ gives 1σ ($-2\Delta\ln L = 1$) and
+2σ (= 4) intervals: the Monte-Carlo uncertainty from the finite number of realisations, not a
+systematic. Every derived flux or luminosity shares the relative interval. They go to the table,
+figures and JSON (`*_1sigma`, `*_2sigma`).
 
 **Rounds.**
 
-1. *Scout*: `n_scout` = 500 realisations, stratified log-uniformly over the bracket. The fit must
-   put the crossing inside the bracket, and the top and bottom 5% of realisations must lie on
-   either side of CL; otherwise the run stops with a bracket error.
-2. *Refine*: up to `n_refine` = 1000 realisations where the linear predictor runs from $-2.5$ to
-   $z_0 + 1.5$, i.e. $f$ from just above $f_0$ to 99.9% of the way to $c$, plus 10% just above that
-   range to measure $c$. The fit uses every realisation from the lower edge of this window up.
-   Below it, $f \simeq f_0$ carries little information, $f_0$ is pinned by the background sample,
-   and the curve is least probit-like.
-3. *Stop* when the 1σ half-width is at most `precision`, or after `max_sims` = 6000
-   realisations or `max_rounds` = 6 rounds. Each round's size follows from the $1/\sqrt N$ scaling
-   of the current half-width. The function default is 0.03 dex (7%). The notebook asks for
-   `ul_precision` = 0.01 dex, which needs about 9× more realisations than 0.03, so with the
-   6000 budget it usually stops on the budget at about ±0.03 dex and reports
-   `converged = False` (§8.1). That flag means only that the requested precision was not reached:
+1. *Scout*: `n_scout` = 500 realisations, log-uniform over the bracket. The crossing must fall
+   inside, else a bracket error.
+2. *Refine*: up to `n_refine` = 1000 realisations where the linear predictor runs from −2.5 to
+   $z_0 + 1.5$, plus 10% just above to measure $c$; the fit uses everything from the window's lower
+   edge up.
+3. *Stop* when the 1σ half-width ≤ `precision`, or at `max_sims` = 6000 or `max_rounds` = 6. The
+   notebook asks for 0.01 dex, which needs ~9× more realisations than 0.03, so it usually stops on
+   the budget at ~±0.03 dex with `converged = False`: the requested precision was not reached, but
    the quoted interval is still the true MC uncertainty.
 
-Three guards cover sparse or unlucky data. A fit to few realisations can collapse into a
-near-step, with the misses above it absorbed by $c<1$ and the hits below by $f_0$, and claim a
-precision the data cannot give. So a transition narrower than three point spacings never counts
-as converged, and the next window is never narrower than ten spacings; it then either resolves
-the transition or confirms it is genuinely steep. If a fit puts the crossing outside its window,
-it is re-located with every realisation, since the scout spans the whole bracket. Every simulated round is cached (`cache_path`) and reused on a rerun: each realisation is
-an independent $(x_i, \Lambda_i)$ pair, so the rounds of an interrupted run remain valid data.
+Guards: a transition narrower than three point spacings never counts as converged (a sparse fit can
+collapse into a near-step), the next window is never narrower than ten spacings, and a crossing
+outside the window is re-located with every realisation. Rounds are cached (`cache_path`), so an
+interrupted run resumes.
 
-**Goodness of fit.** A Hosmer–Lemeshow test (Hosmer & Lemeshow 1980) compares observed and expected detections in
-equal-count groups. The probit is an approximation, and with thousands of realisations the test
-can see shape differences that do not bias the limit (see the single-position curve below). A
-small p-value is a prompt to look at the pulls near $x_{\rm UL}$ and at the closure test (§7.5),
-not a failure by itself.
+**Goodness of fit.** Hosmer & Lemeshow (1980) on equal-count groups. With thousands of realisations
+it can flag shape differences that do not bias the limit; a small p-value is a prompt to check the
+pulls near $x_{\rm UL}$ and the closure test, not a failure.
 
-**Validation.** Synthetic detection curves with a known limit, 200 independent fits each at the
-default settings, run through `_fit_ul` with the same rounds, guards and stopping rule. None of
-the curves is a probit in $\log x$, so the table also measures the cost of the shape
-approximation. Pull = $(\log_{10}x_{\rm UL} - \log_{10}x_{\rm true})$ / 1σ half-width.
+**Validation.** 200 fits per synthetic curve of known limit, none of them a probit, with the
+production settings. Pull = $(\log_{10}x_{\rm UL} - \log_{10}x_{\rm true})$ / 1σ half-width:
 
 | curve $f(x)$ | mimics | 1σ coverage | 2σ coverage | mean pull | pull s.d. | realisations per fit |
 | --- | --- | --- | --- | --- | --- | --- |
-| $\Phi(x/x_0)$ | one position, significance ∝ flux | 0.75 | 0.99 | −0.16 ± 0.06 | 0.83 | 2600 |
-| $\langle\Phi(3xA/x_0)\rangle_A$, $A$ log-normal (σ = 0.5) | 2D: exposure varies over positions | 0.72 | 0.99 | −0.08 ± 0.06 | 0.87 | 3650 |
+| $\Phi(x/x_0)$ | one position | 0.75 | 0.99 | −0.16 ± 0.06 | 0.83 | 2600 |
+| $\langle\Phi(3xA/x_0)\rangle_A$, $A$ log-normal (σ = 0.5) | 2D: exposure spread | 0.72 | 0.99 | −0.08 ± 0.06 | 0.87 | 3650 |
 | $\langle\Phi(x/d^2)\rangle_d$, $d$ log-normal (σ = 0.35) | 3D: distance spread | 0.66 | 0.96 | −0.06 ± 0.07 | 1.05 | 4940 |
-| the same, 1% of draws undetectable ($c$ = 0.995) | 3D coverage cap | 0.65 | 0.93 | +0.48 ± 0.07 | 0.99 | 5440 |
-| the same, 3% of draws undetectable ($c$ = 0.985) | 3D coverage cap | 0.56 | 0.88 | +0.62 ± 0.15 | 2.18 | 5480 |
+| the same, $c$ = 0.995 | 3D coverage cap | 0.65 | 0.93 | +0.48 ± 0.07 | 0.99 | 5440 |
+| the same, $c$ = 0.985 | 3D coverage cap | 0.56 | 0.88 | +0.62 ± 0.15 | 2.18 | 5480 |
 
-Nominal: 0.683 and 0.954 coverage, pull 0 with s.d. 1. For curves that reach 1 the limit is
-unbiased to within 0.16σ, and its intervals cover at or slightly above the nominal rate.
+Curves reaching 1: unbiased to 0.16σ, nominal coverage (0.683 / 0.954) or better. **Curves that
+saturate below 1** are the weak spot: the limit sits where the curve still climbs towards $c$, comes
+out ~0.5σ high (conservative), and the 1σ interval covers only 56–65%. The ceiling itself is measured
+well (fitted 0.987 for a true 0.985), and the run prints a note when $c$ is significantly below 1.
+Then treat the interval as a lower bound and rely on the closure test, or set
+`restrict_to_mask_3d = True`. Without the $c$ parameter the capped curves came out +1.05σ and +6.3σ
+high.
 
-**Curves that saturate below 1 are the weak spot.** Their limit sits where the curve is still
-climbing towards $c$, which is where the probit's shape matters most. There the limit comes out
-about 0.5σ high, which is conservative, and the 1σ interval covers only 56–65%, with occasional
-outliers (pull s.d. 2.2 at $c$ = 0.985). The ceiling itself is measured well: the fitted $c$
-averages 0.987 for a true 0.985. The run prints a note whenever $c$ is significantly below 1.
-In that case treat the interval as a lower bound on the MC uncertainty and rely on the closure
-test (§7.5), or set `restrict_to_mask_3d = True`, which removes the cap.
-
-Rejected variants: without the ceiling $c$, the two capped curves came out +1.05σ and +6.3σ high
-with 1σ coverage 0.40 and 0.01; a window starting at $\eta = -1.5$ left a −0.28σ bias on the
-single-position curve.
-
-**Diagnostics** (`plotting.plot_ul_fit`, six panels): (a) every realisation's $\Lambda$ against its
-own $x$, coloured by round, with $\Lambda^\star$; (b) the binned fraction above $\Lambda^\star$ over the
-whole scanned range, with the fit, its 1σ/2σ band, $f_0$ and $c$; (c) the same around the limit, with
-the limit and its 1σ/2σ intervals; (d) the likelihood profile of $x_{\rm UL}$ against its Gaussian
-(Hessian) approximation; (e) the estimate and its 1σ after each round, against the requested
-precision; (f) the goodness-of-fit pulls.
+**Diagnostics** (`plot_ul_fit`, six panels): every realisation's $\Lambda$ against its $x$; the binned
+fraction with the fit and its bands over the whole range and around the limit; the likelihood
+profile against its Gaussian approximation; the estimate per round; the pulls.
 
 ### 7.4 (removed)
 
@@ -614,31 +477,23 @@ Nov 2026.
 
 ### 7.5 Closure test (3D)
 
-$x_{\rm UL}$ is read off a fitted curve, so it was never simulated itself. The notebook runs $N$ fresh realisations exactly at $L_0^{\rm UL}$ with
-independent seeds and checks (`simulate.closure_pull`)
+$x_{\rm UL}$ is read off a fitted curve, never simulated itself. $N$ fresh realisations exactly at
+$L_0^{\rm UL}$, with independent seeds, must satisfy (`simulate.closure_pull`)
 
 $$
 \text{pull} = \frac{f_{\rm closure}-\mathrm{CL}}{\sqrt{\sigma_f^2 + \sigma_{\rm UL}^2}},\qquad |\text{pull}|<3 ,
 $$
 
-where $\sigma_f$ is the binomial error of the closure sample and $\sigma_{\rm UL}$ the limit's own
-MC uncertainty mapped through the fitted curve, $\tfrac12|f(x_{\rm UL}^{+1\sigma}) - f(x_{\rm UL}^{-1\sigma})|$.
-At $N = 1000$ the two are comparable, so leaving out $\sigma_{\rm UL}$ would fail good limits
-about as often as it passes them.
+with $\sigma_f$ the binomial error and $\sigma_{\rm UL} = \tfrac12|f(x_{\rm UL}^{+1\sigma}) - f(x_{\rm UL}^{-1\sigma})|$
+the limit's own uncertainty through the fitted curve. At $N = 1000$ the two are comparable.
 
 ### 7.6 Trials-factor sanity check
 
-The global 2D limit applies to the *maximum* over the region, so it pays the trials factor. The
-per-pixel sky-map ULs do not. The global limit should therefore sit **at or above** the largest
-per-pixel UL inside $\mathcal{M}_{95}$. A global limit below it points to a problem with $\kappa$
-or with mismatched spectral assumptions.
-
-This check currently **fails** for S240615dg: the global limit is 17% below the largest per-pixel
-UL in the 95% region (§8.1). The comparison is not like for like, though. The global limit averages
-over GW-weighted positions, whereas the per-pixel maximum is taken at the single least favourable
-pixel. So a global limit below the maximum does not necessarily mean a bug. Before the limit is
-quoted, check $\kappa$ and compare against a GW-weighted quantile of the per-pixel ULs instead of
-their maximum.
+The global 2D limit pays the trials factor; per-pixel sky-map ULs do not. So the global limit should
+sit **at or above** the largest per-pixel UL in $\mathcal{M}_{95}$. For S240615dg it is **17% below**
+(§8.1). The comparison is not like for like (a GW-weighted average against the single worst pixel),
+so this need not be a bug, but before quoting, check $\kappa$ and compare with a GW-weighted quantile
+of the per-pixel ULs instead of their maximum.
 
 ---
 
@@ -646,57 +501,49 @@ their maximum.
 
 *Code: `simulate.summarize_upper_limits`, `luminosity_ul_from_flux_ul`, `flux_ul_from_luminosity_ul`.*
 
-The 2D method measures a flux and needs a distance to become a luminosity. The 3D method
-measures a luminosity and needs a distance to become a flux. For S240615dg the 5% and 95% points
-of the distance posterior differ by a factor of about 1.7 (PE and skymap alike), which is about
-3 in $L\propto d^2$. Each limit is therefore reported as a **quantile range** over the FoV-marginal
-$F(r)$ of §3.4, with $d_q = F^{-1}(q)$ for $q$ = 5, 50, 95%:
+The 2D limit is a flux and needs a distance to become a luminosity; the 3D limit the reverse. The
+5–95% distance range of S240615dg spans a factor ~1.7 (~3 in $L\propto d^2$), so each limit is
+reported over the quantiles $d_q = F^{-1}(q)$, $q$ = 5, 50, 95%, of the field-marginal $F(r)$ (§3.4):
 
 $$
-\text{2D}\to L:\quad L_q = 4\pi d_q^2\,F_E^{\rm UL}\ \ (\text{also at } d_{\rm rms}=\sqrt{\langle d^2\rangle});
+\text{2D}\to L:\quad L_q = 4\pi d_q^2\,F_E^{\rm UL}\ \ (\text{also at } d_{\rm rms});
 \qquad
 \text{3D}\to F:\quad \phi_{0,q} = \phi_0(L_0^{\rm UL}, d_q).
 $$
 
-The consistency block prints $L_0^{\rm 3D}/L^{\rm 2D}(d_{50})$ and whether the 3D limit falls inside
-the 2D quantile range. Expected reasons for a gap:
+A consistency block prints $L_0^{\rm 3D}/L^{\rm 2D}(d_{50})$. Expected reasons for a gap: the sky
+support (full map vs mask, §7.2), the far-tail dominance of the distance marginalisation, or, as a
+bug, a mismatched index, band, $\Lambda^\star$ or CL.
 
-1. **Sky support:** full map in 3D versus the mask in 2D (§7.2, coverage cap). Setting
-   `restrict_to_mask_3d = True` removes this difference.
-2. **Distance marginalisation:** far-tail dominance (§7.2).
-3. Mismatched index, band, $\Lambda^\star$ or CL, which would be a bug.
-
-Every quoted number is written to `outputs/results/<source_name>/<stem>_upper_limits.json`. This
-includes Λ, the significance, each limit with its 1σ/2σ MC interval, convergence, goodness of fit,
-and the settings (for the model limit also the full `EmissionModelInjection` configuration and the
-merger time).
+Every quoted number (Λ, significance, each limit with its 1σ/2σ interval, convergence, goodness of
+fit, settings, and for the model limit the full `EmissionModelInjection` configuration and merger
+time) goes to `outputs/results/<source_name>/<stem>_upper_limits.json`.
 
 ### 8.1 Results for S240615dg
 
-These numbers come from the last run of the notebook: LST-1+MAGIC stereo, runs 17821–17825,
-`pybkgmodel` background, 0.6–20 TeV, Γ = 2, 95% CL. The GTIs fall 15.4–17.0 h after the merger.
+Last run: LST-1+MAGIC stereo, runs 17821–17825, `pybkgmodel` background, 0.6–20 TeV, Γ = 2,
+95% CL; GTIs 15.4–17.0 h after the merger.
 
 | Quantity | Value |
 | --- | --- |
 | $\Lambda_{\rm obs}$ / background median | −4.52 / −4.07 |
-| p-value, significance | 0.592 ± 0.007, **−0.23σ**: an under-fluctuation, so $\Lambda^\star$ = background median (§7.1) |
+| p-value, significance | 0.592 ± 0.007, **−0.23σ**: an under-fluctuation, so $\Lambda^\star$ = background median |
 | GW probability in the field / in $\mathcal{M}_{95}$ | 98.9% / 95.0% |
 | Containment factor $\kappa$ | 0.682 |
-| Distance, FoV-marginal skymap posterior (5/50/95%) | 1028 / 1422 / 1817 Mpc |
+| Distance, field-marginal skymap (5/50/95%) | 1028 / 1422 / 1817 Mpc |
 | **2D flux UL** | $\phi_0 = 2.34\times10^{-12}$ cm⁻² s⁻¹ TeV⁻¹ (−2.9%/+3.2% MC, 1σ); photon flux $3.78\times10^{-12}$ cm⁻² s⁻¹; energy flux $1.31\times10^{-11}$ erg cm⁻² s⁻¹ |
 | 2D as a luminosity at 5/50/95% distance | 1.66 / 3.18 / 5.19 × 10⁴⁵ erg s⁻¹ |
-| **3D luminosity UL** (power law, no EBL) | $L_0 = 3.85\times10^{45}$ erg s⁻¹ (−5.0%/+5.5%); closure pull +1.36σ, pass |
-| 3D / 2D at the median distance | 1.21: the 3D limit is looser and lies inside the 2D range |
-| **3D UL with the emission model** (`gti_mean`, Franceschini & Rodighiero 2017 EBL, joint PE draw) | $L_k = 1.99\times10^{47}$ erg s⁻¹ (−7.9%/+8.9%); closure pull +1.06σ, pass |
+| **3D luminosity UL** (power law, no EBL) | $L_0 = 3.85\times10^{45}$ erg s⁻¹ (−5.0%/+5.5%); closure +1.36σ |
+| 3D / 2D at the median distance | 1.21, inside the 2D range |
+| **3D UL with the emission model** (`gti_mean`, Franceschini17 EBL, joint PE draw) | $L_k = 1.99\times10^{47}$ erg s⁻¹ (−7.9%/+8.9%); closure +1.06σ |
 | Model / power-law 3D limit | 51.7 |
 
-All three limits used 5500 realisations and stopped on the budget (`converged = False`, §7.3).
-The emission-model limit is 52× above the power-law one. The ratio combines everything the model
-changes: EBL absorption at the drawn $z$ (5–95%: 0.22–0.34), the softer index (2.2), the
-rest-frame band, the light curve across the runs (§11), and the PE distances (median 1564 Mpc)
-against the skymap ones the power law uses (1422 Mpc). Its fitted ceiling is $c = 0.994$, slightly
-below 1, so its 1σ interval may undercover (§7.3). The earlier skymap route (distances from the
-skymap, angles from $p(\theta_v\mid d)$) gave $1.33\times10^{47}$ erg s⁻¹.
+All three used 5500 realisations and stopped on the budget (`converged = False`). The factor 52
+between the model and power-law limits combines everything the model changes: EBL at the drawn $z$
+(0.22–0.34), the softer index (2.2), the rest-frame band, the light curve across the runs, and the PE
+distances (median 1564 Mpc) against the skymap ones (1422 Mpc). Its fitted ceiling is $c = 0.994$, so
+its 1σ interval may undercover (§7.3). The skymap route (distances from the skymap, angles from
+$p(\theta_v\mid d)$) gave $1.33\times10^{47}$ erg s⁻¹.
 
 ---
 
