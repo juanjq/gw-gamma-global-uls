@@ -32,7 +32,7 @@ What is (and is not) reproduced here
   section at the end of this module (`JetParams`, `offaxis_luminosity`,
   `model_at_theta`) implements instead the multi-element, equal-arrival-time
   integral that Abe et al. (2026, Sec. 3.4) use, after Lamb & Kobayashi
-  (2017). It is validated in `notebooks/setup_model_phenomenological_fixed.ipynb`
+  (2017). It is validated in `notebooks/1_grb_model.ipynb`
   against an independent 1-D calculation on-axis and by shape fits to all five
   catO5 files.
 
@@ -355,9 +355,9 @@ def l_peak_from_anchor(l_anchor_erg_s, t_anchor_s, t_dec_s, beta1, beta2):
 # Assembling a GRBModel
 # ===========================================================================
 
-_DEFAULT_ENERGY_GRID_GEV = np.geomspace(1.0, 1.0e4, 41)   # matches the catO5 grid (setup_model.md Sec. 2)
+_DEFAULT_ENERGY_GRID_GEV = np.geomspace(1.0, 1.0e4, 41)   # matches the catO5 grid (emission_model.md)
 _DEFAULT_TIME_GRID_S = np.geomspace(1.0e-1, 1.0e7, 120)
-_E_REF_GEV = 1.0   # matches the Option 2/3 convention already used in setup_model.ipynb
+_E_REF_GEV = 1.0   # matches the Option 2/3 convention already used in extra/catO5_models.ipynb
 
 
 def _with_node(grid: np.ndarray, x: float) -> np.ndarray:
@@ -369,7 +369,7 @@ def _with_node(grid: np.ndarray, x: float) -> np.ndarray:
     (the rise and decay slopes differ), so unless a node sits exactly on t_dec, every query
     near the peak -- including `.at()`, not just the grid-snapped `.peak()` -- interpolates
     across the kink and cuts the corner. Caught empirically in
-    `notebooks/setup_model_phenomenological.ipynb` Sec. 2.1: without this, the "continuous"
+    `notebooks/extra/stochastic_jet.ipynb` Sec. 2.1: without this, the "continuous"
     query at t_dec was low by a median 9% (max 17%) over 500 random draws, not the ~0 a
     log-log interpolant of a true power law should give.
     """
@@ -695,7 +695,7 @@ def offaxis_luminosity(params: JetParams, theta_view_deg: float, time_s: np.ndar
     Abe et al. 2026 Sec. 3.4 (after Lamb & Kobayashi 2017). Each element, at angle theta
     from the jet axis, carries the recipe's on-axis light curve for its own energy and
     Lorentz factor (Eqs. 1-2): the post-peak decay L ~ E (t'/11 h)^beta2, the same at fixed
-    time for every element (blast-wave scaling, grb_model.EISO_L_EXPONENT = 1), and the
+    time for every element (blast-wave scaling, L ~ E), and the
     beta1 rise before its own t_dec. Its Lorentz factor is Gamma_0 until t_dec and
     Gamma_0 (t/t_dec)^(-3/8) after (Blandford & McKee 1976, Abe Eq. 7). For an observer at
     alpha from the element, with a = delta(alpha)/delta(0):
@@ -799,6 +799,6 @@ def model_at_theta(params: JetParams, theta_view_deg: float,
 def model_set(params: JetParams = BENCHMARK, thetas_deg: np.ndarray = DEFAULT_THETA_GRID_DEG,
               **kwargs) -> GRBModelSet:
     """`model_at_theta` on a grid of viewing angles, as a `grb_model.GRBModelSet`: the same
-    object (and `.save`/`.load` cache format) setup_model.ipynb builds from the catO5 files,
-    so sim_3d consumes either one identically."""
+    object (and `.save`/`.load` cache format) extra/catO5_models.ipynb builds from the catO5 files,
+    so 3_upper_limits consumes either one identically."""
     return GRBModelSet(models={float(th): model_at_theta(params, th, **kwargs) for th in thetas_deg})

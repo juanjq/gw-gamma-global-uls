@@ -1,159 +1,87 @@
 # gw-gamma-global-uls
 
 Monte-Carlo upper-limit pipeline for LST-1 gravitational-wave follow-up. Given a
-GW skymap and a real (or simulated) gamma-ray dataset, it derives:
+GW alert and a real (or simulated) gamma-ray dataset, it derives:
 
-- a **2D flux** upper limit — inject a point source at a fixed flux, sampling only
-  a sky position from the GW 95% credible region, and
-- a **3D luminosity** upper limit — inject at a fixed band luminosity, sampling
-  both sky position and luminosity distance from the full GW posterior, and
-- a **3D upper limit with an emission model** — inject a GRB afterglow (fixed
-  phenomenological jet, EBL-absorbed) at a fixed GTI-mean luminosity, sampling sky
-  position, distance and viewing angle,
+- a **2D flux** upper limit: inject a point source at a fixed flux, sampling only
+  a sky position from the GW 95% credible region;
+- a **3D luminosity** upper limit: inject at a fixed band luminosity, sampling
+  both sky position and luminosity distance from the full GW skymap;
+- a **3D upper limit with an emission model**: inject a GRB afterglow (fixed
+  phenomenological jet, EBL-absorbed) at a fixed GTI-mean luminosity, with sky
+  position, distance and viewing angle drawn together from one GW PE sample.
 
-using a shared test statistic `Lambda = max over the GW region of TS + 2 ln p_GW`.
-The upper limit is the injected amplitude/luminosity at which a target fraction of
-simulated `Lambda` values exceeds the observation. It is found by giving every
-realisation its own injected strength and fitting the detection probability, which also
-gives the limit's Monte-Carlo uncertainty (a bisection is kept as an alternative).
+All three use one test statistic, `Lambda = max over the GW region of TS + 2 ln p_GW`.
+The limit is the injected strength at which a fraction CL of simulated `Lambda`
+values exceeds the observation. Every realisation gets its own injected strength and
+the detection probability is fitted with a probit, which also gives the limit's
+Monte-Carlo uncertainty.
 
 **Documentation:** [`docs/README.md`](docs/README.md) is the index. Start with
-[`docs/physics_and_methods.md`](docs/physics_and_methods.md), which covers the whole pipeline and
-the results for S240615dg.
+[`docs/pipeline.md`](docs/pipeline.md).
+
+## Status (Nov 2026)
+
+Done for **S240615dg** (LST-1+MAGIC, 95% CL, 0.6–20 TeV; numbers in
+[`pipeline.md` §8.1](docs/pipeline.md#81-results-for-s240615dg)):
+
+| Limit | Value | Closure |
+| --- | --- | --- |
+| 2D flux, Γ = 2 | φ0 = 2.34e-12 cm⁻² s⁻¹ TeV⁻¹ (−2.9%/+3.2%) | — |
+| 3D luminosity, Γ = 2 | L0 = 3.85e45 erg/s (−5.0%/+5.5%) | +1.36σ |
+| 3D emission model, joint PE draw | L_k = 1.99e47 erg/s (−7.9%/+8.9%) | +1.06σ |
+
+Open (details in [`pipeline.md` §11.5](docs/pipeline.md#115-still-open)):
+
+1. None of the three limits reached the 0.01 dex target before the 6000-realisation budget
+   (`converged = False`). Raise `ul_max_sims` or quote the wider interval.
+2. The global 2D limit sits 17% *below* the largest per-pixel sky-map UL in the 95% region,
+   which a trials factor should not allow. Unexplained (§7.6).
+3. The power-law 3D limit still draws (sky, d) from the skymap, while the model limit uses
+   the PE, so their ratio also carries the skymap–PE distance difference.
+4. One fixed jet only: no loop over the one-sigma model variants.
+5. S240615dg is a binary black hole: it demonstrates the method, no counterpart is
+   expected. **S241125n** has standardized PE in the repo but has not been run.
+
+## Notebooks, in run order
+
+| Notebook | When | What |
+| --- | --- | --- |
+| [`1_grb_model.ipynb`](notebooks/1_grb_model.ipynb) | once | builds the benchmark jet at 0–90°, the model the emission-model limit injects |
+| [`2_gw_viewing_angle.ipynb`](notebooks/2_gw_viewing_angle.ipynb) | once per alert | standardizes the GWTC PE release, builds p(d, θ_v) and p(θ_v \| d) |
+| [`3_upper_limits.ipynb`](notebooks/3_upper_limits.ipynb) | **main** | data prep, then the 2D, 3D and emission-model limits, closure tests, JSON export |
+
+[`notebooks/extra/`](notebooks/extra/) holds optional explainers that nothing else reads:
+`catO5_models` (the INAF reference files), `stochastic_jet` (random draws from the jet recipe),
+`source_sampling` (how each realisation's source is drawn, for talks).
+
+[`docs/figures/presentation_schemes.ipynb`](docs/figures/presentation_schemes.ipynb) makes the
+presentation figures in `docs/figures/presentation/`.
 
 ## Layout
 
 ```
-gwuls/                     # importable library
-├── paths.py                # single source of truth for every directory (see below)
-├── simulate.py              # the Monte-Carlo + upper-limit engine; also runnable as a CLI
-├── grb_model.py              # emission model F(E,t)/L(E',t'), standardized (setup_model.ipynb)
-├── grb_phenomenological.py    # Nava (2020) / Abe et al. (2026) jet recipe, benchmark jet (setup_model_phenomenological*.ipynb)
-├── gw_pe.py                   # GWTC PE releases -> light per-alert files (setup_angle_distribution.ipynb)
-├── angle_distribution.py      # joint p(d, theta_v) and the Step 4.3 draw p(theta|d) (same notebook)
-├── slurm.py                    # one function to submit a simulate.py grid point to Slurm
-├── utils.py                   # HEALPix / GW-map / distance-CDF helpers
-└── plotting.py                  # shared diagnostic plots
-
-notebooks/
-├── setup_model.ipynb           # run once (or when model files change): standardizes the
-│                                 # numerical emission model, Option 1 -- see "GRB model +
-│                                 # viewing angle" below
-├── setup_model_phenomenological.ipynb        # Option 2: the stochastic phenomenological
-│                                                # jet model that Option 1's files sample from
-├── setup_model_phenomenological_fixed.ipynb  # run once: the benchmark jet (population medians)
-│                                                # at 0-90 deg, the model sim_3d injects
-├── setup_angle_distribution.ipynb  # run once per GW alert: standardizes its PE file and
-│                                     # p(d, theta_v) / p(theta|d) for it
-<<<<<<< HEAD
-└── sim_3d_model_CTAO_paper.ipynb   # main pipeline: data prep, then the 2D flux, 3D luminosity
-                                      # and 3D emission-model upper limits (docs/physics_and_methods.md)
-=======
-├── sim_3d_model_CTAO_paper_pe_joint.ipynb  # MAIN pipeline: data prep, then the 2D flux and 3D
-│                                             # luminosity upper limits (docs/physics_and_methods.md);
-│                                             # the emission-model limit draws (sky, d, theta_v)
-│                                             # together from the PE by default
-└── sim_3d_model_CTAO_paper.ipynb   # previous version: emission-model draws from the skymap only
->>>>>>> 59ef1f28b079adf81d9b3468b9f3b8d00d5f45ae
+gwuls/                        # importable library
+├── paths.py                  # every directory, in one place
+├── simulate.py               # Monte Carlo, samplers, emission-model injection, UL fit, reporting
+├── grb_model.py              # emission model L(E', t'; θ_v), projection with EBL
+├── grb_phenomenological.py   # Nava (2020) / Abe et al. (2026) jet recipe, benchmark jet
+├── gw_pe.py                  # GWTC PE releases -> light per-alert files
+├── angle_distribution.py     # joint p(d, θ_v) and the angle draw
+├── utils.py                  # HEALPix / GW-map / distance-CDF helpers
+└── plotting.py               # diagnostic plots
 
 data/
-├── gw_input/                  # small, trackable inputs: GW skymap .fits + generated
-│                               # per-source distance-CDF / theta-distribution caches
-│                               # (.npz, gitignored)
-├── models/grb_afterglow_inaf/  # raw/  -- tracked catO5_*.fits catalogue files (Step 1, Option 1)
-│                                 # standardized/ -- gwuls.grb_model's own .npz cache
-│                                 #   (gitignored, regenerated by setup_model.ipynb)
-├── models/grb_afterglow_phenomenological/
-│                                 # benchmark/ (+ variants) -- .npz cache written by
-│                                 #   setup_model_phenomenological_fixed.ipynb
-├── ebl/                         # EBL tables (tracked); doubles as $GAMMAPY_DATA if unset
-├── gw_pe/                       # raw/ -- GWTC *-combined_PEDataRelease.hdf5 + PESummaryTable as
-│                                 #   downloaded from Zenodo (GBs, gitignored)
-│                                 # standardized/<superevent>.h5 -- ~1 MB per alert, TRACKED, and
-│                                 #   index.csv: the list of alerts with released PE
-├── tmp/                        # per-source dataset .pkl + bisection scratch (gitignored)
-└── slurm_output/                # sbatch job logs, cluster only (gitignored)
+├── gw_input/                 # GW skymap .fits (tracked) + distance-CDF / θ caches (.npz, ignored)
+├── gw_pe/                    # raw/: GWTC PE releases from Zenodo (GBs, ignored)
+│                             # standardized/<superevent>.h5 + index.csv (~1 MB/alert, TRACKED)
+├── models/grb_afterglow_phenomenological/benchmark/   # benchmark-jet cache (ignored)
+├── models/grb_afterglow_inaf/  # raw/ catO5 .fits (tracked), standardized/ cache (ignored)
+├── ebl/                      # EBL tables (tracked); used as $GAMMAPY_DATA if unset
+└── tmp/                      # per-source dataset .pkl + fit caches (ignored)
 
-outputs/                      # everything the pipeline generates for human consumption
-├── plots/<source_name>/         # figures, one subfolder per GW source
-└── results/<source_name>/        # final .npz / .json upper-limit results
+outputs/                      # ignored: plots/<source>/ and results/*.json
 ```
-
-`outputs/` and the generated parts of `data/` are gitignored — regenerate them by
-rerunning the notebooks, don't hand-copy them between machines except as described
-below.
-
-## GRB model + GW viewing-angle setup
-
-`sim_3d` (in its numerical-model form) needs two things that are naturally
-prepared separately, ahead of time, by their own notebooks:
-
-- **[`notebooks/setup_model.ipynb`](notebooks/setup_model.ipynb)** — run once,
-  or whenever the model files change. Reads the tabulated INAF/CTA-GW
-  catalogue files (`data/models/grb_afterglow_inaf/raw/*.fits`, one per
-  viewing angle), projects each to the intrinsic rest-frame `L(E', t')`, runs
-  the round-trip/EBL validation checks, and writes a standardized `.npz`
-  cache (`data/models/grb_afterglow_inaf/standardized/`) that
-  `gwuls.grb_model.GRBModelSet.load(...)` reads back — `sim_3d` never parses
-  a FITS file itself. Also demonstrates the analytic and constant-power-law
-  model options, and the three ways of getting a model at a viewing angle
-  that isn't on the tabulated grid (nearest / stochastic-nearest /
-  peak-aligned log-L interpolation), after putting every angle file on one
-  common `E_iso`.
-
-  The physics, equations and validation checks behind it are written up in
-  [`docs/setup_model.md`](docs/setup_model.md).
-- **[`notebooks/setup_angle_distribution.ipynb`](notebooks/setup_angle_distribution.ipynb)**
-  — run once per GW alert. Builds the joint `p(d, theta_v)` and from it the
-  viewing-angle draw `p(theta|d)` used in each Monte-Carlo iteration (plus
-  `p(d|theta)` for when the angle is known, and the marginals), from
-  whichever information is actually available for that alert: PE posterior
-  samples (KDE of the equal-weight mixture of all waveform analyses), a
-  GW-detected population with a horizon ("selection"), the Schutz-2011
-  prior, an isotropic prior, or a fixed/dummy placeholder. Every step is
-  checked against an independent estimate, and the options are compared
-  on the model files they would send the draws to. Writes
-  `data/gw_input/<source_name>_theta_distribution.npz` via
-  `gwuls.angle_distribution`.
-
-  PE data: put the GWTC `*-combined_PEDataRelease.hdf5` files (and the
-  catalog's `*-PESummaryTable.hdf5`) in `data/gw_pe/raw/`; Part 0 of the
-  notebook (`gwuls.gw_pe.standardize_all()`) reduces each to
-  `data/gw_pe/standardized/<superevent>.h5` — sky position, distance,
-  inclination, masses, spins, tides, SNR, and the same number of samples
-  from every analysis — and regenerates `index.csv`. Those small files are
-  committed, so the notebook also runs where the raw files are absent (the
-  cluster).
-
-  The physics, equations and validation checks behind it are written up in
-  [`docs/viewing_angle_distribution.md`](docs/viewing_angle_distribution.md).
-
-<<<<<<< HEAD
-In `sim_3d_model_CTAO_paper.ipynb` the emission-model 3D limit (`RUN_MODEL_3D`) injects the
-fixed phenomenological jet built by `setup_model_phenomenological_fixed.ipynb` (`model_dir_3d`,
-default `.../grb_afterglow_phenomenological/benchmark`; see
-[`docs/phenomenological_model.md`](docs/phenomenological_model.md)). Each realisation draws a sky
-position, a distance and a viewing angle θ_v ~ p(θ_v | d) from `theta_dist_path` (the alert's
-cache). `MODEL_NORMALISATION` sets what the limit's luminosity means and `EBL_REFERENCE` the EBL
-model (EBL tables ship in `data/ebl/`). See
-[`docs/physics_and_methods.md`](docs/physics_and_methods.md) §11.
-=======
-In [`sim_3d_model_CTAO_paper_pe_joint.ipynb`](notebooks/sim_3d_model_CTAO_paper_pe_joint.ipynb),
-the main notebook, the emission-model 3D limit (`RUN_MODEL_3D`) injects the fixed phenomenological
-jet (`model_dir_3d`, default `.../grb_afterglow_phenomenological/benchmark`). Each realisation draws
-a sky position, a distance and a viewing angle, set by two options:
-
-| option | values |
-| --- | --- |
-| `SKY_DISTANCE_MODE` | `"pe"` (default): one PE posterior sample per realisation, from `data/gw_pe/standardized/<alert>.h5` (`PE_SOURCE`); `"skymap"`: a skymap bin and its distance ansatz |
-| `THETA_MODE` | `"pe"` (default): the angle of the same PE sample, so (sky, d, θ_v) come from the exact joint posterior; `"gw"`: the alert's p(θ_v \| d) from `setup_angle_distribution.ipynb`; `"fixed"` (`THETA_FIXED_DEG`); `"isotropic"`; `"schutz"`; `"two_bin"` (`THETA_TWO_BIN`); `"selection"` (`THETA_HORIZON_MPC`) |
-
-`THETA_MODE = "pe"` needs `SKY_DISTANCE_MODE = "pe"`. For an alert without released PE, use
-`"skymap"` with `"schutz"`, `"selection"` or `"fixed"`. Every cache name of the model limit carries
-the choice, and the JSON export records it. See
-[`docs/physics_and_methods.md`](docs/physics_and_methods.md) §11 and
-[`docs/viewing_angle_distribution.md`](docs/viewing_angle_distribution.md) §8, §11.
->>>>>>> 59ef1f28b079adf81d9b3468b9f3b8d00d5f45ae
 
 ## Setup
 
@@ -163,96 +91,26 @@ conda activate gw-gamma-global-uls
 python -m ipykernel install --user --name gw-gamma-global-uls --display-name "Python (gw-gamma-global-uls)"
 ```
 
-In VS Code, select `Python (gw-gamma-global-uls)` as the notebook kernel. Do not
-use the `base` kernel for the 3D notebook: `ligo.skymap` contains a compiled
-extension, and mixing its binary dependencies with an unrelated Python 3.13
-environment can terminate the kernel instead of raising a Python exception.
+Use that kernel for the notebooks, not `base`: `ligo.skymap` has a compiled extension and
+can crash a mismatched Python instead of raising. Notebooks put the repo root on `sys.path`,
+so no `pip install` is needed. Quick library check:
+`python -c "from gwuls import simulate; simulate.check_spectral_conversions()"`.
 
-Notebooks import the library as `from gwuls import simulate, utils, plotting, paths`
-after inserting the repo root on `sys.path` (see the first cell of each notebook) —
-no `pip install -e .` needed.
+## Cluster vs. local
 
-## Cluster vs. local workflow
+The real DL3 data lives only on the LST cluster (`gwuls.paths.LST_REAL_DATA_DIR`,
+overridable with `$LST_REAL_DATA_DIR`). Part 1 of the main notebook turns it into a small
+per-source `.pkl` in `data/tmp/`, and everything after that needs only the `.pkl`:
 
-The real DL3 event data lives only on the LST cluster, under
-`/fefs/aswg/workspace/juan.jimenez/data/real` (hardcoded as
-`gwuls.paths.LST_REAL_DATA_DIR`, overridable via the `LST_REAL_DATA_DIR` env var) —
-far too large to copy locally, so the parts of the notebooks that build a
-`MapDataset` from real DL3 data only make sense on the cluster.
+1. **Cluster:** run Part 1 of `3_upper_limits.ipynb` to build `data/tmp/*.pkl`.
+2. **Copy `data/` locally** (code goes through git, never rsync):
+   ```bash
+   rsync -avz cp02:/fefs/aswg/workspace/juan.jimenez/lstreco/gw-gamma-global-uls/data/ \
+     ~/projects/gw-gamma-global-uls/data/
+   ```
+3. **Either machine:** run Part 2 (the simulations) against that `.pkl`.
 
-What those cells produce, though, is a small per-source `.pkl` in `data/tmp/`
-(dataset + GW map + estimators) that the rest of the pipeline — everything in
-`gwuls/simulate.py` — consumes on its own, with no further dependency on the real
-DL3 data or on `gammapy`'s IRF-heavy machinery. That makes the natural split:
-
-1. **On the cluster**: run the early cells of `sim_3d_model_CTAO_paper_pe_joint.ipynb` against
-   the real DL3 data to (re)build `data/gw_input/*.fits` and the per-source
-   `data/tmp/*.pkl`.
-2. **Copy locally** (once, or whenever the inputs change) — see below.
-3. **Locally**: run the simulation/upper-limit cells against the copied `.pkl`, using
-   the same notebooks.
-
-Code changes should flow through git as usual (commit + push to GitHub, pull on
-whichever machine you're on next) — the repo already has a GitHub remote
-(`git@github.com:juanjq/gw-gamma-global-uls.git`), so **code never needs to be
-rsynced from the cluster at all**. The only reason to reach for `rsync` is the
-non-git `data/` contents.
-
-### Submitting the grid-scan Slurm jobs
-
-The notebook can also sweep a full amplitude/luminosity grid instead
-(`USE_ITERATIVE_ULS = False`), which submits one Slurm job per grid point through
-[`gwuls.slurm.submit_simulation_job`](gwuls/slurm.py) — the single place that builds the
-`sbatch` command. Check on submitted jobs with
-`!squeue -u $USER` (or `gwuls.slurm.print_queue()`); pass `dry_run=True` to preview the
-`sbatch` command for one grid point without submitting it.
-
-### The iterative upper limits: method and speed
-
-The default (`USE_ITERATIVE_ULS = True`) path runs locally. `UL_METHOD` picks the engine:
-
-- **`"fit"`** (default, `run_fit_ul[_3d]`): every realisation gets its own injected
-  amplitude/luminosity, and the detection probability is fitted with a probit in log x. A
-  first batch spans the bracket; later batches sit around the limit, and they stop once its
-  1σ Monte-Carlo uncertainty is below `ul_precision` dex or `ul_max_sims` realisations are
-  spent. The limit comes with 1σ/2σ intervals from the likelihood profile, carried into the
-  summary table, the figures and the JSON export. Diagnostic figure:
-  `gwuls.plotting.plot_ul_fit`. Every simulated round is cached in `data/tmp/` and reused on a
-  rerun, e.g. after a crash. Method and validation: `docs/physics_and_methods.md` §7.3.
-- **`"bisect"`** (`run_iterative_ul[_3d]`): the previous bisection, one step after the
-  next, each simulating `n_sim` realisations at one amplitude/luminosity.
-  `USE_DYNAMIC_N_SIM = True` ramps `n_sim` up as the bracket narrows.
-
-**`N_JOBS`** (notebook parameter cell) splits each batch (a round of the fit, or a bisection
-step) across that many worker processes; `-1` uses every CPU the process may use (the Slurm
-allocation, not the whole node). Realisations are seeded by their global index however the
-work is split, so the Lambda sample, and the resulting limit, do not depend on `N_JOBS`. A
-batch always finishes before the next one is placed. Each worker holds its own copy of the
-simulation dataset, so if workers are killed for lack of memory (`BrokenProcessPool`), use a
-smaller `N_JOBS`.
-
-### First time on a new machine
-
-```bash
-git clone git@github.com:juanjq/gw-gamma-global-uls.git ~/projects/gw-gamma-global-uls
-```
-
-### Getting the data `sim_3d_model_CTAO_paper_pe_joint.ipynb` needs
-
-The notebook only ever reads/writes two directories: `data/gw_input/` (the GW
-skymap `.fits` — already tracked in git — plus the generated distance-CDF
-`.npz` cache) and `data/tmp/` (the per-source dataset `.pkl`, built on the
-cluster from the real DL3 data, plus bisection/cache scratch). The emission-model limit also
-reads `data/gw_pe/standardized/<alert>.h5` (tracked in git) and, for `THETA_MODE = "gw"`,
-`data/gw_input/<alert>_theta_distribution.npz` (written by `setup_angle_distribution.ipynb`).
-Nothing else on the cluster is needed to run it locally. From your local machine:
-
-```bash
-rsync -avz --exclude 'slurm_output/' \
-  cp02:/fefs/aswg/workspace/juan.jimenez/lstreco/gw-gamma-global-uls/data/ \
-  ~/projects/gw-gamma-global-uls/data/
-```
-
-Adjust the local destination if you keep the repo somewhere other than
-`~/projects/gw-gamma-global-uls`. Re-run this whenever you regenerate a
-per-source `.pkl` on the cluster and want the newer one locally.
+`N_JOBS` splits each batch of realisations across processes (`-1`: every CPU of the
+allocation). Realisations are seeded by their index, so the result does not depend on
+`N_JOBS`. Each worker holds a copy of the dataset: on `BrokenProcessPool`, lower it. Every
+simulated round is cached in `data/tmp/`, so an interrupted run resumes.

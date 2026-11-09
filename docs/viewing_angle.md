@@ -1,21 +1,14 @@
-# The GW viewing angle in the upper-limit simulation: $p(d_L, \theta_\mathrm{v})$
+# The GW viewing angle: $p(d_L, \theta_\mathrm{v})$
 
-What [`notebooks/setup_angle_distribution.ipynb`](../notebooks/setup_angle_distribution.ipynb)
-computes, the physics behind each step, and the checks that validate it. The code
-lives in [`gwuls/gw_pe.py`](../gwuls/gw_pe.py) (PE files),
-[`gwuls/angle_distribution.py`](../gwuls/angle_distribution.py) (the distributions) and
-[`gwuls/plotting.py`](../gwuls/plotting.py) (the figures). Numbers quoted below are
-for the worked example, **S240615dg** (GW240615_113620, GWTC-5.0), as produced by the
-notebook.
+How each realisation of the emission-model limit gets its viewing angle, and the checks behind it.
+Notebook: [`2_gw_viewing_angle.ipynb`](../notebooks/2_gw_viewing_angle.ipynb). Code:
+[`gwuls/gw_pe.py`](../gwuls/gw_pe.py) (PE files) and
+[`gwuls/angle_distribution.py`](../gwuls/angle_distribution.py) (the distributions). Numbers are for
+**S240615dg** (GW240615_113620, GWTC-5.0), a binary black hole: no jet is expected, it is used
+because its PE is public and its inclination sharply measured. The method is the same for a BNS or
+NSBH.
 
-> **Note:** S240615dg is a binary black hole ($m_1 \approx 34$, $m_2 \approx 26\,M_\odot$),
-> so no jet is expected from it. It is used here because it has a public GWTC-5.0 PE
-> release and a sharply measured inclination. For it, the viewing angle is geometry, not a
-> prediction about a counterpart. The method is the same for a BNS or an NSBH.
-
----
-
-## Contents
+**Contents**
 
 1. [Where this sits in the pipeline](#1-where-this-sits-in-the-pipeline)
 2. [Geometry: from $\theta_{JN}$ to the jet viewing angle](#2-geometry-from-theta_jn-to-the-jet-viewing-angle)
@@ -27,58 +20,31 @@ notebook.
 8. [The alert skymap and the PE disagree on distance](#8-the-alert-skymap-and-the-pe-disagree-on-distance)
 9. [Without PE: population and placeholder options](#9-without-pe-population-and-placeholder-options)
 10. [Where the choice reaches the upper limit](#10-where-the-choice-reaches-the-upper-limit)
-11. [How `sim_3d` uses the result](#11-how-sim_3d-uses-the-result)
-12. [Caveats and open points](#12-caveats-and-open-points)
+11. [How `3_upper_limits` uses the result](#11-how-3_upper_limits-uses-the-result)
+12. [Caveats](#12-caveats)
 13. [References](#13-references)
 
 ---
 
 ## 1. Where this sits in the pipeline
 
-The simulation marginalises the upper limit over the GW source parameters. In every
-iteration $i$ it draws one possible source and simulates its IACT observation
-(Step 4 of the simulation guidelines):
+Every realisation of the emission-model limit draws one possible source (guidelines Step 4):
 
 ```mermaid
 flowchart LR
   P["one PE sample<br/>(RA_i, Dec_i, d_i, θ_i)<br/>default, with PE"] --> D
   A["sky pixel<br/>(RA_i, Dec_i)"] --> B["distance d_i<br/>(skymap, per pixel)"]
-<<<<<<< HEAD
-  B --> C["viewing angle θ_i<br/>drawn from p(θ | d_i)"]
-  C --> D["model at θ_i<br/>(Step 5)"]
-=======
   B --> C["viewing angle θ_i<br/>p(θ | d_i), fixed or a prior"]
-  C --> D["model file at θ_i<br/>(Step 5)"]
->>>>>>> 59ef1f28b079adf81d9b3468b9f3b8d00d5f45ae
+  C --> D["benchmark jet at θ_i"]
   D --> E["normalise to L_k,<br/>flux at d_i, z_i, EBL"]
-  E --> F["simulated observation<br/>→ TS_i"]
+  E --> F["simulated observation<br/>→ Λ_i"]
 ```
 
-<<<<<<< HEAD
-Under the default normalisation (`"gti_mean"`) the model is rescaled to the trial luminosity
-$L_k$, so the angle only enters through the **shape** of the emission model: a larger viewing
-angle delays the light-curve peak by orders of magnitude. The model `sim_3d` injects, the fixed
-phenomenological jet ([`phenomenological_model.md`](phenomenological_model.md)), is tabulated
-every 1°. With the five INAF catO5 files instead, the angle **chooses which file** to use (Section
-10). Either way, the angle distribution decides which light curves the upper limit is built from.
-=======
-With released PE, the main notebook
-([`sim_3d_model_CTAO_paper_pe_joint.ipynb`](../notebooks/sim_3d_model_CTAO_paper_pe_joint.ipynb))
-takes all four values from one posterior sample (top path; Section 11). The lower path is the
-skymap route, used without PE or on request.
-
-The angle only enters through the **shape** of the emission model. The model is rescaled to
-the trial luminosity $L_k$, but a larger viewing angle delays the light-curve peak and softens
-the spectrum. With the INAF catalogue this means **choosing which model file** to use (at
-9.1°, 13.2°, 22.6°, 28.6° or 77.8°). The angle distribution therefore decides which light
-curves the upper limit is built from.
->>>>>>> 59ef1f28b079adf81d9b3468b9f3b8d00d5f45ae
-
-The notebook answers one question per alert: *what is $p(\theta_\mathrm{v} \mid d)$ for this
-alert, given whatever LVK has released?* It writes the answer to
-`data/gw_input/<alert>_theta_distribution.npz`. `sim_3d` loads that file with one call and
-never needs to know which case produced it. With PE, its Part 0 also writes the standardized
-samples (`data/gw_pe/standardized/<alert>.h5`) that the default joint draw reads directly.
+With released PE, all four values come from one posterior sample (top path, §11). The lower path,
+the skymap route, is the fallback without PE. The notebook prepares both: Part 0 writes the
+standardized PE samples (`data/gw_pe/standardized/<alert>.h5`) that the default draw reads, and the
+end of the notebook saves one $p(\theta_\mathrm{v} \mid d)$ to
+`data/gw_input/<alert>_theta_distribution.npz` for the other options.
 
 ---
 
@@ -170,7 +136,7 @@ The same joint answers three other questions:
 
 | question | operation | method |
 | --- | --- | --- |
-| $\theta_i$ once $d_i$ is drawn (every `sim_3d` iteration) | $p(\theta \mid d_i)$ | `ThetaDistribution.sample(n, distance_Mpc=d)` |
+| $\theta_i$ once $d_i$ is drawn (every `3_upper_limits` iteration) | $p(\theta \mid d_i)$ | `ThetaDistribution.sample(n, distance_Mpc=d)` |
 | distance when the angle is known exactly | $p(d \mid \theta_0) = p(d, \theta_0)\,/\,p(\theta_0)$ | `joint.conditional_distance(theta_deg=θ0)` |
 | distance when the angle is known within a range | $p(d \mid a < \theta < b) \propto \int_a^b p(d, \theta)\,d\theta$ | `joint.conditional_distance(theta_range=(a, b))` |
 | one variable regardless of the other | $p(d)$, $\;p(\theta) = \int p(d, \theta)\,dd$ | `joint.marginal_distance()`, `joint.marginal_theta()` |
@@ -266,7 +232,7 @@ The differences are subsampling noise: at most about 1° in the tails and about 
 
 ## 6. Estimating the joint from samples
 
-The samples define $p(d, \theta)$ only implicitly. `sim_3d` needs to evaluate the
+The samples define $p(d, \theta)$ only implicitly. `3_upper_limits` needs to evaluate the
 conditional at *any* $d_i$, so the notebook builds a smooth density on a grid:
 `JointDistanceAngle.from_samples`, a Gaussian kernel density estimate (KDE).
 
@@ -429,7 +395,7 @@ smooth.
 | 2. grid $\theta \mid d_k$ at each sample's own $d$ | 7.1 / 24.6 / 51.0 | 1123 / 1566 / 1849 | 0.819 | 0.016 |
 | 3. `sample_joint` (resampled PE indices) | 6.5 / 24.4 / 51.1 | 1125 / 1565 / 1847 | 0.823 | 0.002 |
 
-Route 2 is what `sim_3d` does when its $d_i$ follow the same $p(d)$. The small shift of the
+Route 2 is what `3_upper_limits` does when its $d_i$ follow the same $p(d)$. The small shift of the
 lowest angles (6.5° → 7.0°) is the KDE smoothing near the face-on edge. Route 3 involves no
 density estimate at all.
 
@@ -437,7 +403,7 @@ density estimate at all.
 
 ## 8. The alert skymap and the PE disagree on distance
 
-`sim_3d` draws $d_i$ from the **alert skymap** (Steps 4.1–4.2). Each HEALPix pixel carries
+`3_upper_limits` draws $d_i$ from the **alert skymap** (Steps 4.1–4.2). Each HEALPix pixel carries
 the Singer et al. (2016) conditional distance ansatz
 
 $$
@@ -543,7 +509,7 @@ all-sky curve at almost every distance. The finer the sky regions, the larger th
 on-axis probability the shortcut is off by −30% in one region (0.057 instead of 0.082) and
 +37% in another (0.100 instead of 0.073).
 
-**Consequences for `sim_3d`.** Over the whole sky the shortcut averages out: drawing
+**Consequences for `3_upper_limits`.** Over the whole sky the shortcut averages out: drawing
 $\Omega$ and $d$ from the same posterior and $\theta$ from $p(\theta \mid d)$ reproduces the
 $\theta$ marginal (route 2 of Section 7.4). It is biased **region by region**. That
 matters because the IACT only covers part of the localisation. What enters the limit is
@@ -566,9 +532,7 @@ A public low-latency skymap carries no inclination information. The options:
 
 The four panels show the pdf per degree, the CDF, the pdf per unit $\cos\theta_\mathrm{v}$
 (where isotropic is flat and the face-on preference of GW selection is obvious), and the
-probability of a near-on-axis view. The gray bands mark the model file angles. (The first
-version of this figure drew the isotropic curve as a raw, unnormalised $\sin\theta$,
-peaking at 1 instead of $\pi/180$, which made it look about 57× larger than the others.)
+probability of a near-on-axis view.
 
 ### 9.1 Isotropic
 
@@ -705,105 +669,48 @@ says:
 
 ## 10. Where the choice reaches the upper limit
 
-*This section applies to the five catO5 files. The phenomenological jet that `sim_3d` injects
-by default is tabulated every 1°, so no binning onto files happens there. Its light curve
-changes continuously with angle: at 11 h it is $10^{-5}$ of the on-axis flux at 50°
-([`phenomenological_model.md`](phenomenological_model.md) §4).*
-
-With the catO5 set, model files exist only at a few angles, and each drawn $\theta_i$ is mapped to one of
-them (`GRBModelSet.get_model`, Step 5). With sorted file angles $\theta_1 < \dots < \theta_K$,
-the fraction of iterations that use file $k$ is:
-
-- **nearest** (Option A): the mass of $p(\theta)$ closest to $\theta_k$,
-  $w_k = \int_{m_{k-1}}^{m_k} p(\theta)\,d\theta$, where the $m_k$ are the midpoints between
-  file angles (0° and 90° at the ends);
-- **stochastic** (Option B): each $\theta$ is split linearly between its two bracketing
-  files, so $w_k = \int p(\theta)\,\Lambda_k(\theta)\,d\theta$ with $\Lambda_k$ the hat
-  function peaking at $\theta_k$. Outside the tabulated range, everything goes to the edge
-  file.
-
-![Fraction of iterations per model file](figures/viewing_angle/theta_v_model_file_weights.png)
-
-Fraction of iterations per model file (nearest):
-
-| option | 9.1° | 13.2° | 22.6° | 28.6° | 77.8° |
-| --- | --- | --- | --- | --- | --- |
-| PE S240615dg | 0.124 | 0.176 | 0.225 | 0.435 | **0.040** |
-| Schutz | 0.063 | 0.092 | 0.137 | 0.487 | **0.221** |
-| selection ($D_h = 3000$) | 0.062 | 0.091 | 0.135 | 0.482 | 0.230 |
-| isotropic | 0.019 | 0.030 | 0.050 | 0.303 | **0.599** |
-| two_bin | 0.124 | 0.075 | 0.086 | 0.307 | 0.409 |
-| fixed (20°) | 0 | 0 | 1 | 0 | 0 |
-
-Stochastic (Option B):
-
-| option | 9.1° | 13.2° | 22.6° | 28.6° | 77.8° |
-| --- | --- | --- | --- | --- | --- |
-| PE S240615dg | 0.125 | 0.177 | 0.222 | 0.384 | 0.092 |
-| Schutz | 0.063 | 0.094 | 0.135 | 0.442 | 0.265 |
-| selection ($D_h = 3000$) | 0.063 | 0.093 | 0.134 | 0.439 | 0.272 |
-| isotropic | 0.019 | 0.030 | 0.049 | 0.321 | 0.581 |
-| two_bin | 0.124 | 0.075 | 0.085 | 0.307 | 0.409 |
-| fixed (20°) | 0 | 0.278 | 0.722 | 0 | 0 |
-
-The far off-axis file (77.8°), where the afterglow is much fainter and later, receives 60%
-of the iterations under the isotropic prior, 22% under Schutz, and 4% (nearest) under this
-event's PE. The gap between the 28.6° and 77.8° files is large. Everything between about 53°
-and 90° lands on the 77.8° file with the nearest method. With the stochastic method, angles
-in that gap mix the two files. A model file at an intermediate angle (around 45–60°) would
-reduce this sensitivity.
+The benchmark jet is tabulated every 1°, and its light curve changes continuously with angle:
+the peak moves from seconds on-axis to $7\times10^4$ s at 50°, and at 11 h the flux is $10^{-5}$ of
+the on-axis value at 50° ([`emission_model.md`](emission_model.md) §4). Under the default
+normalisation (`"gti_mean"`) only the **shape** reaches the limit: where the observation falls on
+the light curve, and so how the runs are weighted. Under `"anchor"` the faintness off-axis enters
+too, and the angle distribution then dominates the limit
+([`pipeline.md`](pipeline.md) §11.2). Either way, the far off-axis tail of $p(\theta_\mathrm{v})$
+is what separates the options: the isotropic prior puts 60% of the draws above 53°, Schutz 22%,
+and the S240615dg PE 4%.
 
 ---
 
-## 11. How `sim_3d` uses the result
+## 11. How `3_upper_limits` uses the result
 
-In the emission-model limit of `sim_3d` (`RUN_MODEL_3D`), `theta_dist_path` points at the saved
-cache, and `simulate.EmissionModelInjection` draws $\theta_i \sim p(\theta \mid d_i)$ for every
-realisation, using the distance that realisation drew from the skymap
-([`physics_and_methods.md`](physics_and_methods.md) §11). For S240615dg the drawn angles have
-5/50/95% quantiles of 9.7° / 33° / 57°, more inclined than the PE alone for the reason given in
-Section 8. The calls underneath are:
+Two options of `simulate.EmissionModelInjection` set the draw, and `simulate.sample_injections_3d`
+performs it:
+
+| notebook option | values |
+| --- | --- |
+| `SKY_DISTANCE_MODE` | `"pe"` (default): (RA, Dec, $d$) of one PE sample per realisation (`simulate.sample_sky_distance_angle_pe`); `"skymap"`: a skymap bin and $d_i$ from its distance ansatz |
+| `THETA_MODE` | `"pe"` (default): $\theta$ of the same PE sample, the exact joint (needs `"pe"` above); `"gw"`: $p(\theta \mid d_i)$ from the saved cache; `"fixed"`, `"isotropic"`, `"schutz"`, `"two_bin"`, `"selection"`: §9 |
+
+With `"pe"`, samples outside the analysis geometry (or the 95% mask) are dropped, which conditions
+the posterior on the sky support, and the source is injected at the centre of the bin its sample
+falls in. The calls underneath:
 
 ```python
 from gwuls import angle_distribution as angdist, paths
 
 theta_dist = angdist.load_theta_distribution(paths.theta_distribution_path(source_name))
-
-# Steps 4.1-4.2 draw d_i from the alert skymap (all N iterations at once):
 theta_i = theta_dist.sample(N, distance_Mpc=d_draws, rng=rng)   # p(theta | d_i), one per d_i
-# distance_Mpc is required for kind "pe" / "selection" and ignored for the others.
-
-# With PE, the guidelines' best option replaces Steps 4.1-4.3 (see Section 8):
-draw = theta_dist.sample_joint(N, rng=rng)   # ra_deg, dec_deg, distance_Mpc, theta_deg of one PE sample
-
-# "The angle is known": the distance distribution for it, from the same joint
-d, p_d = theta_dist.joint.conditional_distance(theta_deg=20.0)   # or theta_range=(0, 10)
+draw = theta_dist.sample_joint(N, rng=rng)                      # (RA, Dec, d, theta) of one PE sample
+d, p_d = theta_dist.joint.conditional_distance(theta_deg=20.0)  # the distance if the angle were known
 ```
 
-In the upper-limit simulation
-([`sim_3d_model_CTAO_paper_pe_joint.ipynb`](../notebooks/sim_3d_model_CTAO_paper_pe_joint.ipynb))
-two independent options of `simulate.EmissionModelInjection` set the draw, and
-`simulate.sample_injections_3d` performs it:
-
-| notebook option | `EmissionModelInjection` | values |
-| --- | --- | --- |
-| `SKY_DISTANCE_MODE` | `sky_distance`, `pe_source` | `"pe"` (default): (RA, Dec, $d$) of one PE sample per realisation (`simulate.sample_sky_distance_angle_pe`), from the standardized file; `"skymap"`: a skymap bin and $d_i$ from its distance ansatz |
-| `THETA_MODE` | `theta_distribution` | `"pe"` (default): $\theta$ of the same PE sample, the exact joint (needs `"pe"` above); `"gw"`: $p(\theta \mid d_i)$ from this notebook's cache; `"fixed"`, `"isotropic"`, `"schutz"`, `"two_bin"`, `"selection"`: Section 9 |
-
-With `SKY_DISTANCE_MODE = "pe"`, PE samples outside the analysis geometry (or the 95% mask) are
-dropped, which conditions the posterior on the sky support, and the source is injected at the
-centre of the bin its sample falls in. The two options combine freely, except that
-`THETA_MODE = "pe"` needs PE sky positions and distances. The notebook's crosscheck (4) compares
-the production draw with the PE samples and with the skymap route.
-
-A new alert with released PE: put its `*-combined_PEDataRelease.hdf5` (and the catalog's
-`*-PESummaryTable.hdf5`) in `data/gw_pe/raw/`, set `source_name` to the superevent ID, and
-run the notebook. Part 0 standardizes the file and updates `index.csv`. Commit
-`data/gw_pe/standardized/`.
+**A new alert with PE:** put its `*-combined_PEDataRelease.hdf5` (and the catalogue's
+`*-PESummaryTable.hdf5`) in `data/gw_pe/raw/`, set `source_name` to the superevent ID, run the
+notebook, and commit `data/gw_pe/standardized/`.
 
 ---
 
-## 12. Caveats and open points
+## 12. Caveats
 
 - **Jet along $\vec J$.** The fold assumes the jet is launched along the remnant spin,
   aligned with the binary's total angular momentum. This is standard for BNS/NSBH, but it is
@@ -823,19 +730,12 @@ run the notebook. Part 0 standardizes the file and updates `index.csv`. Commit
   polarisation, and a sharp SNR threshold. It needs a horizon $D_h$ appropriate to the source
   type and network. 3000 Mpc is illustrative. Its marginal agrees with Schutz to within 0.009
   in CDF.
-- **Model file coverage.** No file lies between 28.6° and 77.8°, so the treatment of that
-  gap (nearest vs stochastic vs interpolation) matters for the prior-driven options
-  (Section 10).
-<<<<<<< HEAD
-- **`sample_joint` is not used by `sim_3d` yet.** The emission-model limit draws $\theta$
-  conditional on the skymap distance (Section 11), so it carries the bias of Section 8.
-=======
+
 - **Power-law 3D limit still uses the skymap.** Only the emission-model limit can draw from the
   PE (`SKY_DISTANCE_MODE = "pe"`). The power-law $L_0$ limit draws (sky, $d$) from the skymap, so
   the two limits then no longer share their sky and distance draws.
 - **Test statistic.** $\Lambda$ still weights by the skymap $p_\mathrm{GW}$ the data were analysed
   with; only the injected population follows the PE.
->>>>>>> 59ef1f28b079adf81d9b3468b9f3b8d00d5f45ae
 
 ---
 

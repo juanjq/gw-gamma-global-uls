@@ -457,7 +457,7 @@ def load_pe(superevent_id_or_path) -> PESamples:
     if not p.exists():
         raise FileNotFoundError(
             f"{p} not found. Standardize the raw PE release first "
-            "(gwuls.gw_pe.standardize_all, or setup_angle_distribution.ipynb Part 0).")
+            "(gwuls.gw_pe.standardize_all, or 2_gw_viewing_angle.ipynb Part 0).")
 
     with h5py.File(p, "r") as f:
         a = dict(f.attrs)

@@ -12,7 +12,7 @@ dependencies:
   - astropy
   - healpy
   - ligo.skymap
-  - regions
+  - regions<0.12   # gammapy 2.1 imports a helper removed in regions 0.12
   - uncertainties
   - jupyterlab
   - tqdm

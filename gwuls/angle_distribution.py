@@ -4,7 +4,7 @@ p(d, theta_v), and everything derived from it (marginals, and conditionals in
 both directions).
 
 Every row of the guidelines' Step 4 table sits behind one standardized
-object, `ThetaDistribution`, so `sim_3d` never has to know which case applied
+object, `ThetaDistribution`, so `3_upper_limits` never has to know which case applied
 to a given GW alert:
 
 | kind        | information used                          | theta_v depends on d? |
@@ -25,7 +25,7 @@ The joint lives in `JointDistanceAngle`, a density on a regular (d, theta_v)
 grid, normalised so that the double integral is 1 (units Mpc^-1 deg^-1).
 From it:
 
-- p(theta_v | d): `conditional_theta(d)` -- what sim_3d needs once d_i is drawn;
+- p(theta_v | d): `conditional_theta(d)` -- what 3_upper_limits needs once d_i is drawn;
 - p(d | theta_v = theta_0) or p(d | theta_v in [a, b]): `conditional_distance`
   -- "the angle is known" (e.g. from an EM counterpart);
 - p(d), p(theta_v): `marginal_distance`, `marginal_theta` -- the angle, or
@@ -399,13 +399,6 @@ class JointDistanceAngle:
             out[s:s + 20_000] = _inverse_cdf_rows(cum, self.theta_deg, rng.random(j.size))
             outside[s:s + 20_000] = o
         return (out, outside) if return_outside else out
-
-    def sample_distance_given_theta(self, size: int, theta_deg: Optional[float] = None,
-                                    theta_range: Optional[Tuple[float, float]] = None,
-                                    rng: Optional[np.random.Generator] = None) -> np.ndarray:
-        rng = rng if rng is not None else np.random.default_rng()
-        d, pdf = self.conditional_distance(theta_deg=theta_deg, theta_range=theta_range)
-        return _sample_1d(d, pdf, size, rng)
 
     def sample(self, size: int, rng: Optional[np.random.Generator] = None
                ) -> Tuple[np.ndarray, np.ndarray]:
@@ -838,13 +831,13 @@ def save_theta_distribution(dist: ThetaDistribution, path) -> None:
 
 
 def load_theta_distribution(path) -> ThetaDistribution:
-    """Inverse of `save_theta_distribution` -- sim_3d's single entry point,
+    """Inverse of `save_theta_distribution` -- 3_upper_limits's single entry point,
     regardless of which Step 4.3 case produced the cached file."""
     d = np.load(path, allow_pickle=False)
     kind = str(d["kind"])
     if kind not in KINDS:
         raise ValueError(f"{path}: kind {kind!r} is not one of {KINDS} -- written by an "
-                         "older version of this module? Re-run setup_angle_distribution.ipynb.")
+                         "older version of this module? Re-run 2_gw_viewing_angle.ipynb.")
 
     def opt(key):
         v = float(d[key]) if key in d else np.nan

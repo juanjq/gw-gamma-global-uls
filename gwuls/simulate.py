@@ -21,10 +21,8 @@ fraction `cl` of the simulated Lambda values exceeds the observed Lambda (or the
 background median Lambda, when the observation under-fluctuates). The crossing is
 found by a maximum-likelihood fit of the detection-probability curve to
 realisations that each get their own injected strength (`run_fit_ul`,
-`run_fit_ul_3d`, Section 6c), which also gives the limit's Monte-Carlo
-uncertainty from the likelihood profile. The older bisection in log space
-(`run_iterative_ul`, `run_iterative_ul_3d`, sharing `_bisect_ul`) is kept as an
-alternative.
+`run_fit_ul_3d`, Section 6), which also gives the limit's Monte-Carlo
+uncertainty from the likelihood profile.
 
 Flux <-> luminosity
 -------------------
@@ -58,7 +56,6 @@ import json
 import multiprocessing
 import os
 import pickle
-import sys
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
@@ -112,13 +109,6 @@ except ImportError as _exc:                             # run as a standalone sc
         from utils import IndexToDeclRa, trapz as _trapz
     except ImportError as _exc2:                        # pragma: no cover
         IndexToDeclRa, _trapz, _UTILS_IMPORT_ERROR = None, None, f"{_exc!r} / {_exc2!r}"
-try:
-    from .plotting import plot_ul_iteration
-except ImportError:                                     # run as a standalone script
-    try:
-        from plotting import plot_ul_iteration
-    except ImportError:                                 # pragma: no cover
-        plot_ul_iteration = None
 
 
 __all__ = [
@@ -139,7 +129,6 @@ __all__ = [
     "sample_injections_3d", "gti_seconds_since", "emission_model_run_spectra",
     # Section 6-7 -- upper limits and reporting
     "run_fit_ul", "run_fit_ul_3d", "closure_pull",
-    "run_iterative_ul", "run_iterative_ul_3d", "geometric_n_sim_schedule",
     "luminosity_ul_from_flux_ul", "summarize_upper_limits", "compare_2d_3d",
 ]
 
@@ -408,14 +397,6 @@ class FluxPoint:
     energy_flux: u.Quantity          # erg cm-2 s-1
     e_dec: u.Quantity                # sqrt(e_min e_max), the log-centre
     e2dnde: u.Quantity               # erg cm-2 s-1 at e_dec
-
-    def as_dict(self):
-        return {
-            "amplitude": self.amplitude, "index": self.index,
-            "e_ref": self.e_ref, "e_min": self.e_min, "e_max": self.e_max,
-            "photon_flux": self.photon_flux, "energy_flux": self.energy_flux,
-            "e_dec": self.e_dec, "e2dnde": self.e2dnde,
-        }
 
     def __str__(self):
         return (
@@ -807,7 +788,7 @@ def _make_source_model(coord, amplitude, index, e_ref=E_REF, name="model-simulat
 def _per_realisation(value, n_sim, name):
     """
     A scalar (the same injected strength for every realisation) or an array of
-    one value per realisation (as the curve fit of Section 6c uses) -> (n_sim,)
+    one value per realisation (as the curve fit of Section 6 uses) -> (n_sim,)
     float array, plus a short description for the progress printout.
     """
     v = np.asarray(value, dtype=float)
@@ -845,11 +826,9 @@ def _pack_results(results, extra, file_output):
 # dataset with seed `base_seed + i`, and record Lambda". Everything below is
 # that loop, made shareable and optionally parallel across processes.
 #
-# Parallelism is per amplitude/luminosity step, not across bisection steps:
-# `run_iterative_ul[_3d]` still calls one step after the next, and each call
-# to `perform_n_simulations[_3d]` -- sequential or parallel -- only returns
-# once every one of its `n_sim` realisations has completed. That is what
-# guarantees the bisection never looks at a partial Lambda sample.
+# Parallelism is within one batch: each call to `perform_n_simulations[_3d]`
+# -- sequential or parallel -- only returns once every one of its `n_sim`
+# realisations has completed, so the fit never sees a partial batch.
 
 class _NullProgress:
     """No-op stand-in for tqdm, used when verbose=False or tqdm is absent."""
@@ -1164,18 +1143,17 @@ def perform_n_simulations(
         behaviour of seeding realisation i with i, which is *deliberate*: it
         gives common random numbers across amplitudes, so the fraction
         Lambda > target varies smoothly (and near-monotonically) with
-        amplitude instead of jittering by Monte-Carlo noise between bisection
-        steps. Pass an int to shift the whole block of seeds.
+        amplitude instead of jittering by Monte-Carlo noise between
+        amplitudes. Pass an int to shift the whole block of seeds.
     position_seed : int, sequence of ints, or None
         Seed for the sky-position draw (anything `np.random.default_rng`
         takes). Fixed by default so that every
-        amplitude tested during a bisection sees the *same* set of injected
+        amplitude tested sees the *same* set of injected
         positions -- previously these came from the unseeded global NumPy
-        stream, which broke common random numbers and made the bisection
-        noisier than it needed to be. Pass None for independent positions.
+        stream, which broke common random numbers. Pass None for independent positions.
     store_ts_maps, store_stats : bool
         Keep full per-iteration TS maps / counts-statistics objects. Each is
-        O(n_sim x n_pix); turn them off for large runs (the bisection does).
+        O(n_sim x n_pix); turn them off for large runs.
     n_jobs : int
         1 (default) runs the `n_sim` realisations sequentially, exactly as
         before. >1 splits them across that many worker processes; -1 uses
@@ -1295,7 +1273,7 @@ def sample_sky_distance_angle_pe(samples, geom, bin_c_ra, bin_c_dec, n_sim, rng,
     p(Omega, d, theta_v | data). It replaces `sample_sky_and_distance` followed by
     theta ~ p(theta | d), which pairs the skymap's distances with the PE's
     distance-angle relation and ignores the sky dependence of p(theta | d)
-    (docs/viewing_angle_distribution.md, Section 8).
+    (docs/viewing_angle.md, Section 8).
 
     samples : dict with "ra_deg", "dec_deg", "distance_Mpc", "theta_deg", equal
         weight (`ThetaDistribution.samples` of a kind "pe" distribution).
@@ -1335,7 +1313,7 @@ def sample_sky_distance_angle_pe(samples, geom, bin_c_ra, bin_c_dec, n_sim, rng,
 #
 # Instead of a power law, each realisation injects a GRB afterglow model
 # L(E', t'; theta) (gwuls.grb_model.GRBModelSet, e.g. the fixed phenomenological
-# benchmark of setup_model_phenomenological_fixed.ipynb):
+# benchmark of 1_grb_model.ipynb):
 #
 #   * (sky, d_i, theta_i) from `sample_injections_3d`: (sky, d_i) from the skymap
 #     or from one PE sample; theta_i the angle of that same PE sample (the exact
@@ -1358,7 +1336,7 @@ _KEYS_MODEL = ("datasets_runs", "run_gti_s")
 
 @dataclass(frozen=True)
 class EmissionModelInjection:
-    """What `perform_n_simulations_3d` / `run_iterative_ul_3d` inject instead of a
+    """What `perform_n_simulations_3d` / `run_fit_ul_3d` inject instead of a
     power law.
 
     model_dir : directory of a `grb_model.GRBModelSet` cache (one .npz per angle),
@@ -1368,7 +1346,7 @@ class EmissionModelInjection:
         "pe"          -- the viewing angle of the same PE sample as (sky, d_i): the
             exact joint posterior. Needs sky_distance="pe";
         a path of an `angle_distribution.ThetaDistribution` cache
-            (setup_angle_distribution.ipynb), e.g. the alert's own, so that
+            (2_gw_viewing_angle.ipynb), e.g. the alert's own, so that
             theta_i ~ p(theta | d_i);
         "fixed:<deg>" -- every realisation at that angle;
         "isotropic"   -- p(theta) = sin(theta), random orientation, no GW information;
@@ -1600,7 +1578,7 @@ def emission_model_run_spectra(model_set, theta_deg, d_Mpc, z, run_gti_s, energy
                                config, analysis_band):
     """dN/dE [cm-2 s-1 TeV-1] of the model at each `energy_obs_TeV`, realisation by
     realisation and run by run, for a trial luminosity L_k = 1 erg/s. The injection
-    at any L_k is L_k times this, which is what makes a bisection cheap.
+    at any L_k is L_k times this, which is what makes trying many L_k cheap.
 
     Per realisation i: the model at theta_i, observer flux
     F(E, t) = (1+z)^2 / (4 pi d^2) L((1+z) E, t / (1+z)) [x EBL(E, z)] (Step 7),
@@ -1625,7 +1603,6 @@ def emission_model_run_spectra(model_set, theta_deg, d_Mpc, z, run_gti_s, energy
     t_obs, w_run, w_all, _ = _gti_time_samples(run_gti_s, config.n_time_per_gti)
     band = config.band_rest_TeV or [float(_as_energy(e).to_value(u.TeV)) for e in _band(analysis_band)]
     band_GeV = (band[0] * 1e3, band[1] * 1e3)
-    kw = {"align_peaks": False} if config.theta_method == "interp" else {}
 
     ebl = (ebl_transmission(e_obs_GeV, z, reference=config.ebl_reference) if config.apply_ebl
            else np.ones((n, n_e)))
@@ -1633,7 +1610,7 @@ def emission_model_run_spectra(model_set, theta_deg, d_Mpc, z, run_gti_s, energy
     anchor = None
     if config.normalisation == "anchor":
         lo, hi = config.anchor_band_TeV
-        anchor = float(_band_luminosity(model_set.get_model(0.0, method=config.theta_method, **kw),
+        anchor = float(_band_luminosity(model_set.get_model(0.0, method=config.theta_method),
                                         lo * 1e3, hi * 1e3, np.array([config.anchor_time_s]))[0])
 
     spectra = np.empty((n, n_runs, n_e))
@@ -1641,7 +1618,7 @@ def emission_model_run_spectra(model_set, theta_deg, d_Mpc, z, run_gti_s, energy
     run_weight = np.empty((n, n_runs))
     cm2 = 4.0 * np.pi * (d_Mpc * u.Mpc.to(u.cm)) ** 2
     for i in range(n):
-        model = model_set.get_model(float(theta_deg[i]), method=config.theta_method, **kw)
+        model = model_set.get_model(float(theta_deg[i]), method=config.theta_method)
         t_rest = t_obs / (1.0 + z[i])
         lum_t = _band_luminosity(model, *band_GeV, t_rest)
         lum_mean[i] = w_all @ lum_t
@@ -1736,7 +1713,7 @@ def perform_n_simulations_3d(
         any remaining difference is then purely the distance marginalisation.
     sampling_seed : int, sequence of ints, or None
         Seed for the (position, distance) draws. Fixed by default so that all
-        L0 values tested during a bisection use the *same* sky/distance
+        L0 values tested use the *same* sky/distance
         realisations (common random numbers), which is what makes the fraction
         curve smooth in L0.
     n_jobs : int
@@ -1874,7 +1851,7 @@ def _perform_3d_model(data, engine, draw, n_sim, luminosity, file_input, file_ou
               f"z 5/50/95% {np.round(q(z_sim), 3)}")
         print(f"  Sampled theta_v 5/50/95%: {np.round(q(theta_sim), 1)} deg")
         print(f"  Model's own GTI-mean band luminosity 5/50/95%: {q(info['lum_gti_mean'])} erg/s")
-        print(f"  Run weights (run / GTI mean) 5/50/95% per run: "
+        print("  Run weights (run / GTI mean) 5/50/95% per run: "
               + ", ".join(f"[{', '.join(f'{v:.2f}' for v in q(info['run_weight'][:, j]))}]"
                           for j in range(info["run_weight"].shape[1])))
 
@@ -2092,513 +2069,7 @@ def check_3d_sampling(file_input, n_sim=20000, seed=7, restrict_to_mask=False,
 
 
 # ===========================================================================
-# 6. Shared bisection engine for the upper limit
-# ===========================================================================
-
-def geometric_n_sim_schedule(n_min, n_max, growth=2.0):
-    """
-    Ready-made `n_sim_schedule` for `run_iterative_ul[_3d]`: `n_min` at
-    iteration 0, multiplying by `growth` each step up to `n_max`.
-
-    Coarse early steps are cheap and only need to get the *sign* of
-    frac - cl right to halve the bracket; only the last few steps -- which
-    decide the quoted number -- need `n_max`'s precision. Combined with
-    `n_jobs`, this is the main lever for a much faster bisection.
-    """
-    n_min, n_max = int(n_min), int(n_max)
-
-    def schedule(iteration):
-        return int(min(n_max, n_min * growth ** iteration))
-    return schedule
-
-
-def _binomial_error(frac, n, floor=1e-6):
-    """Standard error on a fraction, with a floor so 0 and 1 stay usable."""
-    frac = np.clip(np.asarray(frac, dtype=float), 0.0, 1.0)
-    n = np.maximum(np.asarray(n, dtype=float), 1.0)
-    return np.maximum(np.sqrt(frac * (1.0 - frac) / n), floor)
-
-
-def _interpolate_crossing(x_vals, frac_vals, n_vals, cl):
-    """
-    Estimate where frac(x) crosses `cl`, using ALL points evaluated during the
-    bisection rather than only the final bracket.
-
-    Bisection alone returns sqrt(lo*hi), whose accuracy is bounded by the
-    bracket width; the fraction curve is smooth in log x (especially with
-    common random numbers), so a local linear interpolation in
-    (log10 x, frac) is both more accurate and gives a statistical uncertainty
-    for free by propagating the binomial error through the local slope.
-
-    Returns (x_ul, x_lo, x_hi, slope) -- limits are 1 sigma, NaN if unavailable.
-    """
-    x = np.asarray(x_vals, dtype=float)
-    f = np.asarray(frac_vals, dtype=float)
-    n = np.asarray(n_vals, dtype=float)
-    order = np.argsort(x)
-    x, f, n = x[order], f[order], n[order]
-    lx = np.log10(x)
-
-    # Adjacent pairs that straddle the CL. If the curve is noisy there can be
-    # several; take the last (largest-x) one, which is the one the bisection
-    # actually homed in on.
-    straddle = np.where((f[:-1] <= cl) & (f[1:] >= cl))[0]
-    if straddle.size == 0:
-        return np.nan, np.nan, np.nan, np.nan
-    i_lo = int(straddle[-1])
-    j_hi = i_lo + 1
-
-    f_lo, f_hi = f[i_lo], f[j_hi]
-    if np.isclose(f_hi, f_lo):
-        lx_ul, slope = 0.5 * (lx[i_lo] + lx[j_hi]), np.nan
-    else:
-        slope = (f_hi - f_lo) / (lx[j_hi] - lx[i_lo])       # d frac / d log10 x
-        lx_ul = lx[i_lo] + (cl - f_lo) / slope
-
-    if np.isfinite(slope) and abs(slope) > 0:
-        err_f = float(np.mean(_binomial_error([f_lo, f_hi], [n[i_lo], n[j_hi]])))
-        d_lx = err_f / abs(slope)
-        return 10 ** lx_ul, 10 ** (lx_ul - d_lx), 10 ** (lx_ul + d_lx), slope
-    return 10 ** lx_ul, np.nan, np.nan, slope
-
-
-def _bisect_ul(evaluate, x_lo, x_hi, cl, target, precision, frac_tol, max_iter,
-               label="x", unit="", lambda_cache=None, cache_path=None,
-               check_bracket=True, n_sigma_stop=2.0, on_iteration=None,
-               n_sim_schedule=None, verbose=True):
-    """
-    Bisection in log10(x) for the value of x at which
-    P(Lambda_sim > target) = cl. Shared by the 2D and 3D upper limits.
-
-    `evaluate(x, n_sim=None) -> ndarray of Lambda` must be deterministic and
-    cached by the caller (it is, via `lambda_cache`).
-
-    Improvements over the previous per-method loops:
-      * the initial bracket is verified to actually contain the crossing
-        instead of silently returning an endpoint,
-      * the convergence test accounts for Monte-Carlo noise: requiring
-        |frac - cl| < frac_tol is impossible when frac_tol is smaller than the
-        binomial error sqrt(cl(1-cl)/N) (e.g. frac_tol = 0.005 with N = 1000,
-        where the noise alone is 0.0069), so the tolerance is widened to
-        n_sigma_stop x that error and the run no longer burns every iteration,
-      * the final value comes from interpolating the fraction curve, with a
-        1 sigma statistical uncertainty, not just sqrt(lo*hi),
-      * monotonicity of the fraction curve is checked and reported.
-
-    n_sim_schedule : callable(iteration) -> int, or None
-        Optional. When given, the number of realisations used for bisection
-        step `iteration` (0-based; the two bracket checks both use step 0)
-        comes from this instead of the fixed n_sim baked into `evaluate`.
-        Coarse-then-fine schedules (few realisations while the bracket is
-        still wide, more once it has narrowed) reach the same precision in
-        less total simulation time than a constant n_sim throughout, at the
-        cost of a noisier -- but still unbiased -- `frac` in the early steps.
-    """
-    lambda_cache = {} if lambda_cache is None else lambda_cache
-    history = {"x": [], "frac": [], "err": [], "n": [], "lo": [], "hi": []}
-
-    def _frac_at(x, n_sim=None):
-        lam = evaluate(x, n_sim=n_sim) if n_sim is not None else evaluate(x)
-        lam = np.asarray(lam, dtype=float)
-        lam = lam[np.isfinite(lam)]
-        if lam.size == 0:
-            raise ValueError(f"All Lambda values are non-finite at {label} = {x:.4e}")
-        f = float(np.mean(lam > target))
-        return f, lam.size
-
-    def _record(x, f, n, lo, hi):
-        history["x"].append(x); history["frac"].append(f)
-        history["err"].append(float(_binomial_error(f, n)))
-        history["n"].append(n); history["lo"].append(lo); history["hi"].append(hi)
-
-    # --- bracket verification ------------------------------------------
-    bracket_warning = None
-    if check_bracket:
-        _n0 = n_sim_schedule(0) if n_sim_schedule is not None else None
-        f_lo, n_lo = _frac_at(x_lo, _n0)
-        f_hi, n_hi = _frac_at(x_hi, _n0)
-        _record(x_lo, f_lo, n_lo, x_lo, x_hi)
-        _record(x_hi, f_hi, n_hi, x_lo, x_hi)
-        if verbose:
-            print(f"\n[bracket] {label}={x_lo:.3e} {unit} -> frac={f_lo:.3f}   |   "
-                  f"{label}={x_hi:.3e} {unit} -> frac={f_hi:.3f}   (CL={cl})")
-        if f_lo > cl:
-            bracket_warning = (
-                f"frac({label}={x_lo:.3e}) = {f_lo:.3f} already exceeds CL = {cl}: "
-                f"the true limit is BELOW the lower bracket. Lower `{label}_lo`.")
-        elif f_hi < cl:
-            bracket_warning = (
-                f"frac({label}={x_hi:.3e}) = {f_hi:.3f} is still below CL = {cl}: "
-                f"the true limit is ABOVE the upper bracket. Raise `{label}_hi`.")
-        if bracket_warning:
-            print(f"  ERROR: {bracket_warning}")
-            print("  The bisection below will converge to a bracket edge and the "
-                  "returned limit will be meaningless. Fix the bracket and rerun.")
-
-    # --- bisection -------------------------------------------------------
-    converged = False
-    for iteration in range(max_iter):
-        x_mid = np.sqrt(x_lo * x_hi)
-        _n = n_sim_schedule(iteration) if n_sim_schedule is not None else None
-        frac, n_eff = _frac_at(x_mid, _n)
-        err = float(_binomial_error(frac, n_eff))
-
-        if frac > cl:
-            x_hi = x_mid
-        else:
-            x_lo = x_mid
-        _record(x_mid, frac, n_eff, x_lo, x_hi)
-
-        if on_iteration is not None:
-            on_iteration(iteration, x_mid, frac, x_lo, x_hi, history)
-
-        width = np.log10(x_hi / x_lo)
-        tol = max(frac_tol, n_sigma_stop * err)
-        if verbose:
-            print(f"[Iter {iteration+1:2d}] {label} = {x_mid:.4e} {unit}  "
-                  f"N = {n_eff}  frac = {frac:.3f} +- {err:.3f}  "
-                  f"bracket = [{x_lo:.3e}, {x_hi:.3e}]  width = {width:.4f} dex")
-
-        bracket_ok = width < precision
-        frac_ok = abs(frac - cl) < tol
-        if bracket_ok and frac_ok:
-            converged = True
-            if verbose:
-                print(f"  Converged after {iteration+1} iterations "
-                      f"(bracket {width:.4f} dex, |frac - CL| = {abs(frac-cl):.4f} "
-                      f"< {tol:.4f}).")
-            break
-        if verbose:
-            if bracket_ok and not frac_ok:
-                print(f"    bracket converged but |frac - CL| = {abs(frac-cl):.4f} "
-                      f">= {tol:.4f} (MC noise {err:.4f}) -- continuing")
-            elif frac_ok and not bracket_ok:
-                print(f"    frac within tolerance but bracket is {width:.3f} dex "
-                      f"wide -- continuing")
-    else:
-        if verbose:
-            print(f"  WARNING: reached max_iter = {max_iter} without meeting both "
-                  f"convergence criteria.")
-
-    # --- final estimate + diagnostics ------------------------------------
-    x_interp, x_1s_lo, x_1s_hi, slope = _interpolate_crossing(
-        history["x"], history["frac"], history["n"], cl)
-    x_bisect = float(np.sqrt(x_lo * x_hi))
-    x_ul = x_interp if np.isfinite(x_interp) else x_bisect
-
-    order = np.argsort(history["x"])
-    f_sorted = np.asarray(history["frac"])[order]
-    n_violations = int((np.diff(f_sorted) < -3 * np.mean(history["err"])).sum())
-    if n_violations and verbose:
-        print(f"  NOTE: the fraction curve is non-monotonic at {n_violations} "
-              f"place(s) beyond 3x the MC error. Bisection assumes monotonicity; "
-              f"consider more simulations per step or a wider bracket.")
-
-    # atol must be 0 here: with the default atol = 1e-8, every amplitude of
-    # order 1e-12 is "close" to every other one and the flag fires always.
-    edge_flag = bool(
-        np.isclose(x_ul, min(history["x"]), rtol=0.02, atol=0.0)
-        or np.isclose(x_ul, max(history["x"]), rtol=0.02, atol=0.0)
-    )
-
-    return {
-        "x_ul": float(x_ul),
-        "x_ul_bisect": x_bisect,
-        "x_ul_interp": float(x_interp) if np.isfinite(x_interp) else np.nan,
-        "x_ul_lo_1sigma": float(x_1s_lo), "x_ul_hi_1sigma": float(x_1s_hi),
-        "bracket_final": (float(x_lo), float(x_hi)),
-        "bracket_width_dex": float(np.log10(x_hi / x_lo)),
-        "slope_dfrac_dlogx": float(slope) if np.isfinite(slope) else np.nan,
-        "converged": bool(converged),
-        "at_bracket_edge": bool(edge_flag),
-        "bracket_warning": bracket_warning,
-        "n_monotonicity_violations": n_violations,
-        "history": history,
-        "lambda_cache": lambda_cache,
-        "target": float(target), "cl": float(cl),
-    }
-
-
-def _cached_evaluator(simulate_fn, lambda_cache, cache_path, tag, verbose=True):
-    """
-    Wrap a simulation call with the on-disk / in-memory Lambda cache.
-
-    `simulate_fn` and the returned `evaluate` both take an optional `n_sim`
-    override (used by a `_bisect_ul` `n_sim_schedule`); the cache key is
-    still just `x`, since a bisection revisits the same x only at the two
-    bracket endpoints -- a cache hit there simply reuses whatever sample size
-    produced the cached entry.
-    """
-    def evaluate(x, n_sim=None):
-        key = f"{x:.6e}"
-        if key in lambda_cache:
-            if verbose:
-                print(f"  [cache] {tag} = {x:.4e} -- reusing "
-                      f"{len(lambda_cache[key])} existing simulations")
-            return lambda_cache[key]
-        lambda_cache[key] = simulate_fn(x, n_sim=n_sim) if n_sim is not None else simulate_fn(x)
-        if cache_path is not None:
-            os.makedirs(os.path.dirname(os.path.abspath(cache_path)), exist_ok=True)
-            with open(cache_path, "wb") as f:
-                pickle.dump(lambda_cache, f)
-            if verbose:
-                print(f"  [cache] saved {len(lambda_cache)} entries -> {cache_path}")
-        return lambda_cache[key]
-    return evaluate
-
-
-def _load_cache(cache_path, verbose=True):
-    if cache_path is not None and os.path.exists(cache_path):
-        with open(cache_path, "rb") as f:
-            cache = pickle.load(f)
-        if verbose:
-            print(f"Loaded Lambda cache with {len(cache)} entries from {cache_path}\n")
-        return cache
-    return {}
-
-
-# --- 6a. 2D: upper limit on the flux ---------------------------------------
-
-def run_iterative_ul(
-    path_pkl, lambda_real, lambda_bkg, lambda_bkg_m, significance, p_value,
-    energy_edges, cl, n_sim=500, precision=0.05, frac_tol=0.01,
-    amp_lo=1e-13, amp_hi=1e-10, max_iter=20, cache_path=None,
-    spectral_index=2.0, e_ref=E_REF, seed=None, position_seed=12345,
-    tmp_dir=str(paths.TMP_DIR), check_bracket=True, make_plots=True,
-    n_jobs=1, verbose=True,
-):
-    """
-    2D flux upper limit: bisect the PWL amplitude until a fraction `cl` of
-    simulated Lambdas exceeds the target (the observed Lambda, or the
-    background median when the observation under-fluctuates).
-
-    n_sim : int or callable(iteration) -> int
-        Realisations per bisection step. A plain int (default) reuses it at
-        every step, unchanged from before. Pass a callable for a dynamic
-        schedule -- e.g. `lambda it: min(2000, 200 * 2**it)` starts coarse
-        and grows the sample only once the bracket needs the precision --
-        see `geometric_n_sim_schedule` for a ready-made one.
-    n_jobs : int
-        Forwarded to `perform_n_simulations` for every step: 1 (default) is
-        sequential, >1 parallelises the n_sim realisations of EACH step
-        across that many processes, -1 uses every available CPU. Each step
-        still fully completes before the next amplitude is tested.
-
-    Returns a dict containing, among the diagnostics, the full set of
-    band-integrated flux quantities implied by the limit (`flux_point`).
-    """
-    target = lambda_bkg_m if significance < 0 else lambda_real
-    if verbose:
-        print("=" * 78)
-        print(f"2D iterative flux UL  |  CL = {cl}  |  target Lambda = {target:.3f} "
-              f"({'BKG median (observation under-fluctuates)' if significance < 0 else 'observed'})")
-        print("=" * 78)
-
-    lambda_cache = _load_cache(cache_path, verbose)
-    os.makedirs(tmp_dir, exist_ok=True)
-
-    n_sim_base = n_sim(0) if callable(n_sim) else int(n_sim)
-    n_sim_schedule = n_sim if callable(n_sim) else None
-
-    def _simulate(amp, n_sim=None):
-        n_sim = n_sim_base if n_sim is None else int(n_sim)
-        fname = os.path.join(tmp_dir, f"iterative_ul_{amp:.6e}.npz")
-        perform_n_simulations(
-            n_sim=n_sim, amplitude=amp, file_input=path_pkl, file_output=fname,
-            compute_uls=0, spectral_index=spectral_index, e_ref=e_ref,
-            seed=seed, position_seed=position_seed,
-            store_ts_maps=False, store_stats=False, n_jobs=n_jobs, verbose=False,
-        )
-        return np.load(fname)["lambda_data"]
-
-    evaluate = _cached_evaluator(_simulate, lambda_cache, cache_path, "phi0", verbose)
-
-    on_iteration = None
-    if make_plots and plot_ul_iteration is not None:
-        import matplotlib.pyplot as plt
-
-        def _plot_iteration(it, x_mid, frac, lo, hi, hist):
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 3))
-            try:
-                plot_ul_iteration(
-                    ax1, ax2, lambda_bkg, lambda_cache[f"{x_mid:.6e}"], lambda_real,
-                    lambda_bkg_m, target, hist["x"], hist["frac"], x_mid, lo, hi,
-                    frac, cl, p_value, significance, it, max_iter, energy_edges,
-                    precision,
-                )
-                plt.tight_layout(); plt.show()
-            except Exception as exc:                     # plotting must never kill a run
-                plt.close(fig)
-                print(f"  (per-iteration plot skipped: {exc})")
-
-        on_iteration = _plot_iteration
-
-    res = _bisect_ul(
-        evaluate, amp_lo, amp_hi, cl, target, precision, frac_tol, max_iter,
-        label="phi0", unit="cm-2 s-1 TeV-1", lambda_cache=lambda_cache,
-        cache_path=cache_path, check_bracket=check_bracket,
-        on_iteration=on_iteration, n_sim_schedule=n_sim_schedule, verbose=verbose,
-    )
-
-    amp_final = res["x_ul"]
-    fp = flux_point_from_amplitude(amp_final, energy_edges, spectral_index, e_ref)
-
-    if verbose:
-        print(f"\n{'='*78}")
-        print("2D FLUX UPPER LIMIT")
-        print(f"{'-'*78}")
-        print(f"  {str(fp)}")
-        if np.isfinite(res['x_ul_lo_1sigma']):
-            print(f"  phi0 stat. uncert. (1 sigma, MC): "
-                  f"[{res['x_ul_lo_1sigma']:.3e}, {res['x_ul_hi_1sigma']:.3e}]")
-        print(f"  bisection value {res['x_ul_bisect']:.3e}  |  interpolated "
-              f"{res['x_ul_interp']:.3e}  |  bracket width "
-              f"{res['bracket_width_dex']:.4f} dex")
-        print(f"  iterations {len(res['history']['x'])}  |  total simulations "
-              f"{sum(len(v) for v in lambda_cache.values())}  |  converged "
-              f"{res['converged']}")
-        if res["at_bracket_edge"]:
-            print("  WARNING: the limit sits at the edge of the tested range -- widen it.")
-        print(f"{'='*78}")
-
-    out = dict(res)
-    out.update({
-        # legacy keys, unchanged meaning
-        "amp_ul": amp_final,
-        "flux_ul": fp.photon_flux,
-        "flux_diff_ul": fp.energy_flux,
-        "hist_amp": res["history"]["x"],
-        "hist_frac": res["history"]["frac"],
-        "hist_err": res["history"]["err"],
-        # new
-        "method": "2d", "ul_method": "bisect",
-        "flux_point": fp,
-        "photon_flux_ul": fp.photon_flux,
-        "energy_flux_ul": fp.energy_flux,
-        "e2dnde_ul": fp.e2dnde,
-        "energy_edges": energy_edges,
-        "spectral_index": float(spectral_index),
-    })
-    return out
-
-
-# --- 6b. 3D: upper limit on the band luminosity ----------------------------
-
-def run_iterative_ul_3d(
-    path_pkl, lambda_real, lambda_bkg, lambda_bkg_m, significance, p_value,
-    cl, n_sim=500, precision=0.05, frac_tol=0.01, lum_lo=1e45, lum_hi=1e52,
-    max_iter=20, cache_path=None, spectral_index=2.0, e_ref=E_REF, seed=None,
-    sampling_seed=12345, luminosity_band=None, apply_k_correction=False,
-    restrict_to_mask=False, tmp_dir=str(paths.TMP_DIR), check_bracket=True,
-    n_jobs=1, verbose=True, emission_model=None,
-):
-    """
-    3D luminosity upper limit: same bisection, on the isotropic-equivalent
-    BAND luminosity L0, with the sky position and the distance marginalised
-    over the GW posterior at every realisation.
-
-    emission_model : None, or an `EmissionModelInjection` -- inject the emission
-        model instead of the power law (see `perform_n_simulations_3d`); L0 is then
-        what `emission_model.normalisation` says, and theta_v is marginalised too.
-
-    Now shares `_bisect_ul` with the 2D version, so both limits are defined by
-    exactly the same convergence criteria and the same crossing estimator --
-    previously the 3D loop was a hand-copied variant that had already drifted
-    (no bracket check, no MC-aware tolerance, no interpolated crossing).
-
-    n_sim, n_jobs : see `run_iterative_ul` -- both accepted identically here
-        (n_sim as an int or a callable(iteration) -> int schedule; n_jobs to
-        parallelise each step's realisations across processes).
-    """
-    target = lambda_bkg_m if significance < 0 else lambda_real
-    band = luminosity_band
-    if band is None:
-        with open(path_pkl, "rb") as f:
-            band = pickle.load(f)["energy_edges"]
-
-    if verbose:
-        e_lo, e_hi = _band(band)
-        print("=" * 78)
-        print(f"3D iterative luminosity UL  |  CL = {cl}  |  target Lambda = {target:.3f}")
-        if emission_model is None:
-            print(f"L0 is the isotropic-equivalent luminosity in [{e_lo:.2f}, {e_hi:.2f}], "
-                  f"index {spectral_index} (NOT bolometric)")
-        else:
-            print(f"Emission model {emission_model.model_dir}\n{emission_model.describe(band)}")
-        print("=" * 78)
-
-    lambda_cache = _load_cache(cache_path, verbose)
-    os.makedirs(tmp_dir, exist_ok=True)
-
-    n_sim_base = n_sim(0) if callable(n_sim) else int(n_sim)
-    n_sim_schedule = n_sim if callable(n_sim) else None
-
-    def _simulate(lum, n_sim=None):
-        n_sim = n_sim_base if n_sim is None else int(n_sim)
-        tag = "" if emission_model is None else "_model"
-        fname = os.path.join(tmp_dir, f"iterative_ul3d{tag}_{lum:.6e}.npz")
-        perform_n_simulations_3d(
-            n_sim=n_sim, luminosity=lum, file_input=path_pkl, file_output=fname,
-            compute_uls=0, spectral_index=spectral_index, e_ref=e_ref, seed=seed,
-            sampling_seed=sampling_seed, luminosity_band=band,
-            apply_k_correction=apply_k_correction, restrict_to_mask=restrict_to_mask,
-            store_ts_maps=False, store_stats=False, n_jobs=n_jobs, verbose=False,
-            emission_model=emission_model,
-        )
-        return np.load(fname)["lambda_data"]
-
-    evaluate = _cached_evaluator(_simulate, lambda_cache, cache_path, "L0", verbose)
-
-    res = _bisect_ul(
-        evaluate, lum_lo, lum_hi, cl, target, precision, frac_tol, max_iter,
-        label="L0", unit="erg/s", lambda_cache=lambda_cache, cache_path=cache_path,
-        check_bracket=check_bracket, n_sim_schedule=n_sim_schedule, verbose=verbose,
-    )
-
-    lum_final = res["x_ul"]
-
-    if verbose:
-        print(f"\n{'='*78}")
-        print("3D LUMINOSITY UPPER LIMIT")
-        print(f"{'-'*78}")
-        e_lo, e_hi = _band(band)
-        if emission_model is None:
-            print(f"  L0 UL = {lum_final:.3e} erg/s   [{e_lo:.2f}-{e_hi:.2f}, "
-                  f"isotropic-equivalent, index {spectral_index}]")
-        else:
-            print(f"  L0 UL = {lum_final:.3e} erg/s   [{emission_model.describe(band)}]")
-        if np.isfinite(res["x_ul_lo_1sigma"]):
-            print(f"  stat. uncert. (1 sigma, MC): "
-                  f"[{res['x_ul_lo_1sigma']:.3e}, {res['x_ul_hi_1sigma']:.3e}] erg/s")
-        print(f"  bisection value {res['x_ul_bisect']:.3e}  |  interpolated "
-              f"{res['x_ul_interp']:.3e}  |  bracket width "
-              f"{res['bracket_width_dex']:.4f} dex")
-        print(f"  iterations {len(res['history']['x'])}  |  total simulations "
-              f"{sum(len(v) for v in lambda_cache.values())}  |  converged "
-              f"{res['converged']}")
-        if res["at_bracket_edge"]:
-            print("  WARNING: the limit sits at the edge of the tested range -- widen "
-                  "`lum_lo`/`lum_hi`.")
-        print(f"{'='*78}")
-
-    out = dict(res)
-    out.update({
-        "lum_ul": lum_final,
-        "hist_lum": res["history"]["x"],
-        "hist_frac": res["history"]["frac"],
-        "hist_err": res["history"]["err"],
-        "method": "3d", "ul_method": "bisect",
-        "luminosity_band": band,
-        "spectral_index": float(spectral_index),
-        "apply_k_correction": bool(apply_k_correction),
-        "restrict_to_mask": bool(restrict_to_mask),
-        "emission_model": None if emission_model is None else asdict(emission_model),
-    })
-    return out
-
-
-# ===========================================================================
-# 6c. Upper limit from a fit of the detection-probability curve
+# 6. Upper limit from a fit of the detection-probability curve
 # ===========================================================================
 #
 # Bisection uses one x per step and only the SIGN of frac - CL there, and every
@@ -2635,7 +2106,7 @@ def run_iterative_ul_3d(
 # background-only sample pins f0 anyway.
 #
 # Validated on synthetic curves that are NOT probits, 200 fits each (table in
-# docs/physics_and_methods.md, section 7.3). For curves that reach 1, the 1 and
+# docs/pipeline.md, section 7.3). For curves that reach 1, the 1 and
 # 2 sigma intervals cover the true limit at or above the nominal rate and the
 # mean pull is within 0.16 sigma of zero. For curves that saturate below 1
 # (c = 0.985-0.995) the limit comes out ~0.5 sigma high -- conservative -- and
@@ -2644,6 +2115,13 @@ def run_iterative_ul_3d(
 
 _FIT_ETA_WINDOW = (-2.5, 1.5)      # refine window: eta from -2.5 up to z0 + 1.5
 _FIT_TOP_FRACTION = 0.1            # share of each refine round above the window, for c
+
+
+def _binomial_error(frac, n, floor=1e-6):
+    """Standard error on a fraction, with a floor so 0 and 1 stay usable."""
+    frac = np.clip(np.asarray(frac, dtype=float), 0.0, 1.0)
+    n = np.maximum(np.asarray(n, dtype=float), 1.0)
+    return np.maximum(np.sqrt(frac * (1.0 - frac) / n), floor)
 
 
 def _probit_params(theta, cl):
@@ -2871,7 +2349,7 @@ def _fit_ul(simulate_batch, x_lo, x_hi, cl, target, lambda_bkg, n_scout=500,
             bracket_names=("x_lo", "x_hi"), verbose=True):
     """
     Upper limit on x from a maximum-likelihood fit of P(Lambda > target | x);
-    shared by the 2D and 3D limits (see the comment at the top of Section 6c).
+    shared by the 2D and 3D limits (see the comment at the top of Section 6).
 
     simulate_batch(x, round_index, first_index) -> Lambda, one per x[i]. The
     realisation for x[i] must use the background seed of global index
@@ -3094,7 +2572,7 @@ def run_fit_ul(
 ):
     """
     2D flux upper limit from a fit of the detection-probability curve
-    (Section 6c): every realisation gets its own amplitude phi0 and its own sky
+    (Section 6): every realisation gets its own amplitude phi0 and its own sky
     position inside the 95% region.
 
     amp_lo, amp_hi : bracket for the scout round [cm-2 s-1 TeV-1].
@@ -3175,7 +2653,7 @@ def run_fit_ul_3d(
 ):
     """
     3D luminosity upper limit from a fit of the detection-probability curve
-    (Section 6c): every realisation gets its own L0, and its own sky position,
+    (Section 6): every realisation gets its own L0, and its own sky position,
     distance (and, with `emission_model`, viewing angle) from the GW posterior.
 
     Arguments as in `run_fit_ul`, with `lum_lo`/`lum_hi` [erg/s] as the scout
@@ -3504,62 +2982,3 @@ def compare_2d_3d(result_2d, result_3d, energy_edges, prob_gw, cdf_table,
     return summarize_upper_limits(
         result_2d=result_2d, result_3d=result_3d, energy_edges=energy_edges,
         r_grid=r_grid, distance_cdf=cdf, index=index, e_ref=e_ref, **kwargs)
-
-
-# ===========================================================================
-# 8. Entry point
-# ===========================================================================
-
-def _main(argv):
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Run GW follow-up simulations (2D flux or 3D luminosity).")
-    if "--self-test" in argv:
-        check_spectral_conversions()
-        return
-    parser.add_argument("n_sim", type=int)
-    parser.add_argument("value", type=float,
-                        help="PWL amplitude [cm-2 s-1 TeV-1] in 2D mode, "
-                             "band luminosity [erg/s] in 3D mode.")
-    parser.add_argument("file_input")
-    parser.add_argument("file_output")
-    parser.add_argument("compute_uls", type=int, nargs="?", default=0)
-    parser.add_argument("--mode", choices=["2d", "3d"], default="2d")
-    parser.add_argument("--index", type=float, default=2.0)
-    parser.add_argument("--seed", type=int, default=None)
-    parser.add_argument("--no-store-maps", action="store_true",
-                        help="Do not keep per-iteration TS maps / stats objects.")
-    parser.add_argument("--n-jobs", type=int, default=1, dest="n_jobs",
-                        help="Worker processes for this grid point's n_sim "
-                             "realisations (-1 = all CPUs on the node).")
-    parser.add_argument("--self-test", action="store_true",
-                        help="Run the spectral conversion crosschecks and exit.")
-    args = parser.parse_args(argv)
-
-    if args.self_test:
-        check_spectral_conversions()
-        return
-
-    store = not args.no_store_maps
-    if args.mode == "2d":
-        perform_n_simulations(
-            args.n_sim, args.value, args.file_input, args.file_output,
-            compute_uls=args.compute_uls, spectral_index=args.index,
-            seed=args.seed, store_ts_maps=store, store_stats=store,
-            n_jobs=args.n_jobs)
-    else:
-        perform_n_simulations_3d(
-            args.n_sim, args.value, args.file_input, args.file_output,
-            compute_uls=args.compute_uls, spectral_index=args.index,
-            seed=args.seed, store_ts_maps=store, store_stats=store,
-            n_jobs=args.n_jobs)
-
-
-if __name__ == "__main__":
-    if len(sys.argv) < 5 and "--self-test" not in sys.argv:
-        print("Usage: python simulate.py <n_sim> <value> <in.pkl> <out.npz> "
-              "[compute_uls] [--mode 2d|3d] [--index 2.0] [--seed N]")
-        print("       python simulate.py --self-test")
-        sys.exit(1)
-    _main(sys.argv[1:])

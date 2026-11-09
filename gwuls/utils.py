@@ -318,30 +318,3 @@ def compute_threshold_masks(threshold_maps, ra_grid, dec_grid, lvk_prob_2d, bin_
         ])
         masks.append(mask)
     return masks
-
-
-# ---------------------------------------------------------------------------
-# Math / statistical helpers
-# ---------------------------------------------------------------------------
-
-def sigmoid(x, L, x0, k, b):
-    """
-    L:  curve's maximum value (upper plateau)
-    x0: the x-value of the sigmoid's midpoint
-    k:  the steepness of the curve
-    b:  the minimum value (lower plateau)
-    """
-    return b + (L - b) / (1 + np.exp(-k * (x - x0)))
-
-
-def find_amplitude_at_cl(x, y, cl=0.95):
-    x, y = np.array(x), np.array(y)
-    s    = np.argsort(x); x, y = x[s], y[s]
-    a    = np.where(y >= cl)[0]
-    if len(a) == 0:
-        return np.nan
-    i = a[0]
-    if i == 0:
-        return 10**x[0]
-    x1, x2, y1, y2 = x[i-1], x[i], y[i-1], y[i]
-    return 10**(x1 + (cl - y1) * (x2 - x1) / (y2 - y1))
