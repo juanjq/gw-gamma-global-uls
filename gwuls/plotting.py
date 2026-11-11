@@ -11,6 +11,68 @@ from scipy.stats import norm
 
 from .utils import trapz as _trapz
 
+
+# ---------------------------------------------------------------------------
+# Per-pixel upper-limit references
+# ---------------------------------------------------------------------------
+
+# All three references below are single-pixel statements and carry no trials
+# factor. The agnostic one is the maximum per-pixel UL in the 95% region, so it
+# bounds the hotspot value from above by construction.
+UL_REF_STYLES = {
+    "agnostic": dict(color="0.25", ls="--", lw=1.6),
+    "hotspot":  dict(color="tab:purple", ls=":", lw=1.7),
+    "full_map": dict(color="0.65", ls="-.", lw=1.1),
+}
+
+
+def add_ul_references(ax, agnostic=None, hotspot=None, full_map=None, *,
+                      label_prefix="per-pixel", fontsize=8, text_y=None, log10=False):
+    """Draw the per-pixel UL references with one consistent style.
+
+    agnostic : largest per-pixel UL in the 95% GW region ("agnostic 95%").
+        It is the least constraining single-pixel UL that is valid anywhere in
+        that region.
+    hotspot  : per-pixel UL at the pixel where ``Lambda = TS + 2 ln p_GW`` is
+        largest, i.e. the data-selected position. It carries no trials
+        factor, because the pixel was chosen after looking at the data.
+    full_map : largest per-pixel UL over the full map, including the part
+        outside the 95% region (optional, "agnostic full map").
+
+    Because ``agnostic`` is the maximum over a region that contains the
+    hotspot pixel, ``hotspot <= agnostic`` always. When the two coincide they
+    are drawn as one line with a combined label instead of two overlapping
+    lines.
+    """
+    def _same(a, b):
+        return a is not None and b is not None and abs(a - b) <= 1e-3 * max(abs(a), abs(b))
+
+    _pre = f"{label_prefix} " if label_prefix else ""
+    entries = []
+    if agnostic is not None:
+        entries.append((float(agnostic), "agnostic",
+                        f"{_pre}agnostic 95% (max): {agnostic:.3e}"))
+    if hotspot is not None:
+        if _same(hotspot, agnostic):
+            entries = [(float(agnostic), "agnostic",
+                        f"{_pre}agnostic 95% = hotspot (max): {agnostic:.3e}")]
+        else:
+            entries.append((float(hotspot), "hotspot",
+                            f"{_pre}hotspot ($\\Lambda$ max): {hotspot:.3e}"))
+    if full_map is not None and not any(_same(full_map, v) for v, _, _ in entries):
+        entries.append((float(full_map), "full_map",
+                        f"{_pre}agnostic full map (max): {full_map:.3e}"))
+
+    for value, kind, label in entries:
+        x = np.log10(value) if log10 else value
+        ax.axvline(x, label=label, zorder=3, **UL_REF_STYLES[kind])
+        if text_y is not None:
+            ax.annotate(f"{value:.2e}", xy=(x, text_y), xytext=(3, 0),
+                        textcoords="offset points", rotation=90, va="top", ha="left",
+                        fontsize=fontsize - 1, color=UL_REF_STYLES[kind]["color"])
+    return [entry[0] for entry in entries]
+
+
 # ---------------------------------------------------------------------------
 # Summary plots
 # ---------------------------------------------------------------------------
@@ -206,9 +268,16 @@ def summary_ts_maps(
 def plot_flux_ul_map_and_distributions(geom, bin_edges_ra, bin_edges_dec, flux_ul_smoothed,
                                        source_coord, source_name, fluxs, fluxs_95,
                                        flux_uls, flux_uls_95, lvk_prob_2d, threshold_maps,
-                                       energy_edges):
-    """Real-data flux-UL sky map next to the flux/UL distributions, in and out of the 95% mask."""
-    fig = plt.figure(figsize=(9.3, 3))
+                                       energy_edges, lambda_max_coord=None,
+                                       flux_ul_agnostic=None, flux_ul_hotspot=None,
+                                       flux_ul_full_max=None):
+    """Real-data flux-UL sky map next to the flux/UL distributions, in and out of the 95% mask.
+
+    The UL panel also shows the agnostic 95% and hotspot per-pixel limits;
+    the map marks ``lambda_max_coord`` (the pixel where Lambda is largest) when
+    it is given. Neither per-pixel value includes a trials factor.
+    """
+    fig = plt.figure(figsize=(10.2, 3.2))
     ax1 = plt.subplot(121, projection=geom.wcs)
     ax2 = plt.subplot(122)
 
@@ -217,21 +286,29 @@ def plot_flux_ul_map_and_distributions(geom, bin_edges_ra, bin_edges_dec, flux_u
     fig.colorbar(p_sig, ax=ax1, label="Flux UL  [1 / (s cm$^2$)]")
     ax1.plot(source_coord.ra, source_coord.dec, "xw", label=source_name,
              transform=ax1.get_transform("icrs"))
+    if lambda_max_coord is not None:
+        ax1.plot(lambda_max_coord.ra, lambda_max_coord.dec, marker="*", ms=13, mfc="tab:purple",
+                 mec="w", mew=0.8, ls="", transform=ax1.get_transform("icrs"),
+                 label=r"hotspot ($\Lambda$ max pixel)")
 
     h = ax2.hist(fluxs, 40, histtype="stepfilled", color="dodgerblue", label="Total flux distribution")
     ax2.hist(fluxs_95, h[1], histtype="step", color="darkblue", label="Flux in 95%")
     h = ax2.hist(flux_uls_95, 40, histtype="step", color="k", label="ULs in 95%")
-    ax2.hist(flux_uls, h[1], histtype="stepfilled", color="k", alpha=0.3, label="Total UL distribution")
+    ax2.hist(flux_uls, h[1], histtype="stepfilled", color="k", alpha=0.3,
+             label="Total UL distribution")
+    add_ul_references(ax2, flux_ul_agnostic, flux_ul_hotspot, flux_ul_full_max,
+                      label_prefix="", fontsize=8)
 
     lims = ax1.get_xlim(), ax1.get_ylim()
     ax1.contour(lvk_prob_2d, levels=threshold_maps, transform=ax1.get_transform("icrs"),
                colors="0.9", origin="lower", extent=[-180, 180, -90, 90])
     ax1.set_xlim(*lims[0]); ax1.set_ylim(*lims[1]); ax1.grid(alpha=0.7)
-    ax2.set(xlabel="Flux UL [1 / (s cm$^2$)]", ylabel="Counts", yscale="log")
-    ax2.set_title(f"{energy_edges[0]:.2f}–{energy_edges[1]:.2f}")
+    ax2.set(xlabel=r"Photon flux UL [cm$^{-2}$ s$^{-1}$]", ylabel="Counts", yscale="log")
+    ax2.set_title(f"Flux and UL distributions: {energy_edges[0]:.2f}–{energy_edges[1]:.2f} TeV")
     ax1.coords[0].set_axislabel_position("b"); ax1.coords[0].set_ticklabel_position("b")
     ax1.coords[0].set_axislabel("RA [deg]"); ax1.coords[1].set_axislabel("DEC [deg]")
-    ax2.legend(loc=(1.01, 0), frameon=False)
+    ax1.legend(loc="upper right", frameon=False, fontsize=8)
+    ax2.legend(loc=(1.01, 0), frameon=False, fontsize=8)
     fig.tight_layout()
     plt.show()
 
@@ -717,11 +794,16 @@ def plot_ul_fit(result, label="\\phi_0", unit="cm$^{-2}$s$^{-1}$TeV$^{-1}$", met
 
 
 def plot_closure_test(lambda_bkg, lambda_clo, target_lambda, frac_clo, err_clo, cl,
-                      d_clo, photon_flux_clo, flux_ul_value, x_label="L_0"):
+                      d_clo, photon_flux_clo, flux_ul_value, x_label="L_0",
+                      flux_ul_agnostic=None, flux_ul_hotspot=None,
+                      flux_ul_full_max=None):
     """
     3-panel closure-test figure: an independent Lambda sample at the quoted
     UL against BKG, the distances drawn at that UL, and the spread of
     injected fluxes it corresponds to (vs. the 2D flux UL, for scale).
+
+    The flux panel can also carry the per-pixel references (agnostic 95%,
+    hotspot, optional full-map maximum); they are there for scale only.
     """
     fig, ax = plt.subplots(1, 3, figsize=(14, 3.4))
 
@@ -745,10 +827,14 @@ def plot_closure_test(lambda_bkg, lambda_clo, target_lambda, frac_clo, err_clo, 
 
     log_flux = np.log10(photon_flux_clo)
     ax[2].hist(log_flux, 50, color="seagreen", alpha=0.7)
-    ax[2].axvline(np.log10(flux_ul_value), color="crimson", lw=1.8, label="2D flux UL")
+    ax[2].axvline(np.log10(flux_ul_value), color="crimson", lw=1.8,
+                  label="agnostic 95% with GW-weight")
+    add_ul_references(ax[2], flux_ul_agnostic, flux_ul_hotspot, flux_ul_full_max,
+                      label_prefix="", fontsize=8, log10=True)
     ax[2].axvline(np.median(log_flux), color="k", ls="--", label="median injected")
     ax[2].set_xlabel("$\\log_{10}$ photon flux [cm$^{-2}$s$^{-1}$]"); ax[2].set_ylabel("Counts")
-    ax[2].set_title(f"Fluxes injected at ${x_label}^{{UL}}$"); ax[2].legend(frameon=False, fontsize=8)
+    ax[2].set_title(f"Fluxes injected at ${x_label}^{{UL}}$")
+    ax[2].legend(frameon=False, fontsize=7)
 
     fig.tight_layout(); plt.show()
 
@@ -756,7 +842,8 @@ def plot_closure_test(lambda_bkg, lambda_clo, target_lambda, frac_clo, err_clo, 
 def plot_uls_summary(r_grid, pdf_marg, d_q, lum2, flx3, flx2, lum3, lum3_1sigma,
                      flux_uls_95, result_2d, result_3d, amp_ul, lum_ul,
                      energy_edges, source_name, type_obs, confidence_level,
-                     spectral_index):
+                     spectral_index, flux_ul_agnostic=None, flux_ul_hotspot=None,
+                     flux_ul_full_max=None, flux_uls=None):
     """
     The final "both methods, both currencies" comparison: the distance prior
     both conversions share, the flux and luminosity limits from each method
@@ -766,6 +853,21 @@ def plot_uls_summary(r_grid, pdf_marg, d_q, lum2, flx3, flx2, lum3, lum3_1sigma,
     results' `x_ul_lo/hi_1sigma`); a limit's conversion to the other currency
     carries the same relative uncertainty, shown on its median-distance point.
     Thick translucent bars are the 5-95% spread over the distance posterior.
+
+    Naming used in the flux panel:
+      - "agnostic 95% with GW-weight": the quoted 2D/MC limit, built from
+        Lambda = TS + 2 ln p_GW over the 95% region (trials corrected).
+      - "agnostic 95%": max per-pixel UL over the 95% region. It is the least
+        constraining single-pixel UL valid anywhere in that region and carries
+        no trials factor.
+      - "hotspot": per-pixel UL at the pixel where Lambda is largest, i.e. the
+        data-selected position. It also carries no trials factor; because the
+        agnostic value is the maximum over a region containing that pixel,
+        hotspot <= agnostic. When they coincide, one combined line is drawn.
+      - "agnostic full map": max per-pixel UL over the whole map (optional).
+
+    ``flux_uls`` (optional) is the full per-pixel UL distribution; when given,
+    the flux panel shows it next to the distribution inside the 95% region.
     """
     def _rel_1sigma(res, value):
         lo, hi = res.get("x_ul_lo_1sigma", np.nan), res.get("x_ul_hi_1sigma", np.nan)
@@ -795,40 +897,66 @@ def plot_uls_summary(r_grid, pdf_marg, d_q, lum2, flx3, flx2, lum3, lum3_1sigma,
 
     ax = fig.add_subplot(gs[0, 1:])
     ax.errorbar([flx2], [1], xerr=[[flx2 * 0.35]], xuplims=True, fmt="o",
-                color="crimson", ms=7, lw=2, label="2D: measured flux UL")
+                color="crimson", ms=7, lw=2,
+                label="agnostic 95% with GW-weight (2D MC)")
     _mc_caps(ax, flx2, 1.0, rel2, "crimson", label="MC 1$\\sigma$ of the limit")
     ax.plot([min(flx3), max(flx3)], [0.55, 0.55], color="seagreen", lw=6, alpha=0.35)
     ax.errorbar([flx3[1]], [0.55], xerr=[[flx3[1] * 0.35]], xuplims=True, fmt="s",
                 color="seagreen", ms=7, lw=2,
                 label="3D: flux equivalent of $L_0^{UL}$ (5-95% in $d$)")
     _mc_caps(ax, flx3[1], 0.55, rel3, "seagreen")
-    # per-pixel sky-map ULs on a twin axis: a different statistic (no trials
-    # correction), shown only for scale.
+    # Per-pixel sky-map ULs on a twin axis: all pixels and the 95% region.
+    # They are a different statistic (no trials correction), shown for scale.
     _axh = ax.twinx()
-    _axh.hist(flux_uls_95[~np.isnan(flux_uls_95)], 40, color="0.8", zorder=-5)
-    _axh.set_yticks([]); _axh.set_zorder(-1)
+    _uls_all = None if flux_uls is None else np.asarray(flux_uls, dtype=float)
+    if _uls_all is not None:
+        _uls_all = _uls_all[np.isfinite(_uls_all)]
+    _uls_95 = np.asarray(flux_uls_95, dtype=float)
+    _uls_95 = _uls_95[np.isfinite(_uls_95)]
+    _hist_ref = _uls_all if _uls_all is not None and _uls_all.size else _uls_95
+    _bins = np.histogram_bin_edges(_hist_ref, 40)
+    if _uls_all is not None and _uls_all.size:
+        _axh.hist(_uls_all, _bins, color="0.92", zorder=-6)
+        ax.plot([], [], color="0.92", lw=6, label="all pixels")
+    _axh.hist(_uls_95, _bins, color="0.72", zorder=-5)
+    ax.plot([], [], color="0.72", lw=6, label="pixels in agnostic 95%")
+    _axh.set_zorder(-1)
+    _axh.set_ylabel("pixels / bin", fontsize=8)
+    _axh.tick_params(axis="y", labelsize=7)
     ax.set_zorder(1); ax.patch.set_visible(False)
-    ax.plot([], [], color="0.8", lw=6, label="per-pixel sky-map ULs (95% region)")
-    ax.set_xscale("log"); ax.set_ylim(-0.05, 1.35); ax.set_yticks([])
+    # per-pixel references: no trials factor, shown for scale only
+    if flux_ul_agnostic is None:
+        flux_ul_agnostic = float(np.nanmax(flux_uls_95))
+    add_ul_references(ax, flux_ul_agnostic, flux_ul_hotspot, flux_ul_full_max,
+                      label_prefix="per-pixel", fontsize=8)
+    ax.text(flx2, 1.12, f"2D {flx2:.3e}", color="crimson", ha="center", fontsize=8)
+    ax.text(flx3[1], 0.67, f"3D {flx3[1]:.3e}", color="seagreen", ha="center", fontsize=8)
+    ax.set_xscale("log"); ax.set_ylim(-0.05, 1.35)
+    ax.set_yticks([0.55, 1.0], labels=["3D", "2D"]); ax.set_ylabel("method")
     ax.set_xlabel("Photon flux UL [cm$^{-2}$ s$^{-1}$]  "
                  f"({energy_edges[0]:.2f}-{energy_edges[1]:.2f})")
     ax.set_title("FLUX upper limits", fontsize=10)
-    ax.legend(frameon=False, fontsize=8, loc="upper left")
+    ax.legend(frameon=True, framealpha=0.92, edgecolor="none", fontsize=7,
+              loc="upper left", ncol=2, columnspacing=1.0, handlelength=1.6)
 
     ax = fig.add_subplot(gs[1, 1:])
     ax.plot([min(lum2), max(lum2)], [1.0, 1.0], color="crimson", lw=6, alpha=0.35)
     ax.errorbar([lum2[1]], [1.0], xerr=[[lum2[1] * 0.35]], xuplims=True, fmt="o",
                 color="crimson", ms=7, lw=2,
-                label="2D: luminosity equivalent of $\\phi_0^{UL}$ (5-95% in $d$)")
+                label="2D: luminosity equivalent of the flux UL (5-95% in $d$)")
     _mc_caps(ax, lum2[1], 1.0, rel2, "crimson")
     ax.errorbar([lum3], [0.55], xerr=[[lum3 * 0.35]], xuplims=True, fmt="s",
                 color="seagreen", ms=7, lw=2, label="3D: measured $L_0$ UL (marginalised)")
     _mc_caps(ax, lum3, 0.55, rel3, "seagreen", label="MC 1$\\sigma$ of the limit")
-    ax.set_xscale("log"); ax.set_ylim(0.2, 1.45); ax.set_yticks([])
+    ax.text(lum2[1], 1.12, f"2D {lum2[1]:.3e}", color="crimson", ha="center", fontsize=8)
+    ax.text(lum3, 0.67, f"3D {lum3:.3e}", color="seagreen", ha="center", fontsize=8)
+    ax.set_xscale("log"); ax.set_ylim(0.2, 1.45)
+    ax.set_yticks([0.55, 1.0], labels=["3D", "2D"]); ax.set_ylabel("method")
     ax.set_xlabel("Isotropic-equivalent luminosity UL [erg s$^{-1}$]  "
                  f"({energy_edges[0]:.2f}-{energy_edges[1]:.2f})")
     ax.set_title("LUMINOSITY upper limits", fontsize=10)
-    ax.legend(frameon=False, fontsize=8, loc="upper left")
+    ax.legend(frameon=True, framealpha=0.92, edgecolor="none", fontsize=7,
+              loc="upper left")
 
     ax = fig.add_subplot(gs[1, 0])
     for res, xs_key, ul, color, marker, lab in (
@@ -854,28 +982,44 @@ def plot_uls_summary(r_grid, pdf_marg, d_q, lum2, flx3, flx2, lum3, lum3_1sigma,
     plt.show()
 
 
-def plot_uls_vs_real_distribution(flux_uls, flux_uls_95, flux_real, energy_edges,
-                                  significance=None):
-    """Real per-pixel flux-UL distribution with the quoted UL marked."""
-    fig, ax = plt.subplots(figsize=(3, 2))
+def plot_uls_vs_real_distribution(flux_uls, flux_uls_95, flux_ul_global, energy_edges,
+                                  significance=None, flux_ul_agnostic=None,
+                                  flux_ul_hotspot=None, flux_ul_full_max=None):
+    """Real per-pixel flux-UL distribution with the quoted and reference ULs marked.
+
+    ``flux_ul_global`` is the trials-corrected MC limit used in the paper
+    ("agnostic 95% with GW-weight", crimson). The three optional per-pixel
+    references are drawn with the shared ``add_ul_references`` style; they
+    carry no trials factor.
+    """
+    fig, ax = plt.subplots(figsize=(5.6, 3.2))
     mask = ~np.isnan(flux_uls_95)
     single_pixel = np.sum(mask) == 1
 
-    h = ax.hist(flux_uls, 40, histtype="stepfilled", color="lightgray", label="Total distribution")
+    h = ax.hist(flux_uls, 40, histtype="stepfilled", color="0.85",
+                label="All pixels")
     if single_pixel:
         ax.axvline(flux_uls_95[mask][0], color="k", lw=1, label="ULs in 95%")
     else:
-        ax.hist(flux_uls_95, h[1], histtype="step", color="k", label="ULs in 95%")
+        ax.hist(flux_uls_95, h[1], histtype="step", color="k", lw=1.4,
+                label="Pixels in 95% region")
 
     ymid = np.diff(ax.get_ylim())[0] / 2
+    ax.errorbar(flux_ul_global, ymid, yerr=0, xerr=flux_ul_global * 0.2, xuplims=True, ls="",
+                color="crimson", lw=2,
+                label="agnostic 95% with GW-weight (trials corrected)")
+    ax.axvline(flux_ul_global, ls="-", color="crimson", lw=1.8)
 
-    ax.axvline(flux_real, ls="-", color="green")
-    ax.errorbar(flux_real, ymid, yerr=0, xerr=flux_real * 0.2, xuplims=True, ls="",
-                color="green", label="Flux UL")
+    add_ul_references(ax, flux_ul_agnostic, flux_ul_hotspot, flux_ul_full_max,
+                      label_prefix="", fontsize=8)
 
-    ax.set_xlabel("Flux UL [1 / (s cm2)]"); ax.set_ylabel("Normalized counts")
-    ax.set_title(f"{energy_edges[0]:.2f}-{energy_edges[1]:.2f}")
-    ax.legend(frameon=False, loc=(1.03, 0))
+    title = f"{energy_edges[0]:.2f}–{energy_edges[1]:.2f} TeV"
+    if significance is not None:
+        title += f"   ({significance:+.2f}$\\sigma$)"
+    ax.set_xlabel(r"Photon flux UL [cm$^{-2}$ s$^{-1}$]"); ax.set_ylabel("Counts")
+    ax.set_title(title)
+    ax.legend(frameon=False, loc="upper left", fontsize=7)
+    fig.tight_layout()
     plt.show()
 
 
