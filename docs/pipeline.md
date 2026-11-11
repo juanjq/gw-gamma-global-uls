@@ -489,11 +489,26 @@ the limit's own uncertainty through the fitted curve. At $N = 1000$ the two are 
 
 ### 7.6 Trials-factor sanity check
 
-The global 2D limit pays the trials factor; per-pixel sky-map ULs do not. So the global limit should
-sit **at or above** the largest per-pixel UL in $\mathcal{M}_{95}$. For S240615dg it is **17% below**
-(§8.1). The comparison is not like for like (a GW-weighted average against the single worst pixel),
-so this need not be a bug, but before quoting, check $\kappa$ and compare with a GW-weighted quantile
-of the per-pixel ULs instead of their maximum.
+The quoted 2D limit is the **agnostic 95% with GW-weight** value: it is built from the distribution
+of $\Lambda = TS + 2\ln p_{\rm GW}$ over $\mathcal{M}_{95}$, so it pays the trials factor. The
+per-pixel sky-map ULs do not. The per-pixel references are the **hotspot** UL at the pixel where
+$\Lambda$ is largest, the **agnostic 95%** UL, the largest per-pixel UL in $\mathcal{M}_{95}$, and
+optionally the **agnostic full map** UL over all pixels. Because the agnostic 95% value is the
+maximum over a region that contains the hotspot pixel,
+$\mathrm{UL}_{\rm hotspot}\le\mathrm{UL}_{\rm agnostic\,95\%}$ by construction; a hotspot value above
+it means the two are not taken from the same map, mask or smoothing. A positive background
+fluctuation raises the observed counts and hence the UL at the hotspot pixel, so the hotspot can
+coincide with (or approach) the agnostic maximum even though its *expected* sensitivity is good.
+
+The naive expectation is that the GW-weighted limit sits **at or above** the agnostic 95% maximum.
+For S240615dg it is **17% below** (§8.1); the hotspot lies below that maximum, at a different pixel.
+Depending on the data set the hotspot can also coincide with the agnostic value: in the current mono
+run the $\Lambda$-max pixel is also the largest-UL pixel, so both are
+$3.58\times10^{-12}$ cm$^{-2}$ s$^{-1}$. Both orderings satisfy
+$\mathrm{UL}_{\rm hotspot}\le\mathrm{UL}_{\rm agnostic\,95\%}$. The comparison with the GW-weighted
+limit is not like for like — it maximises over a region with GW weights, whereas each sky-map UL is a
+single fixed pixel — so this need not be a bug. Before quoting, check $\kappa$ and compare with a
+GW-weighted quantile of the per-pixel ULs instead of their maximum.
 
 ---
 
